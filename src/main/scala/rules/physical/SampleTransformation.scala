@@ -1,13 +1,16 @@
 package rules.physical
 
+import java.nio.file.{Files, Paths}
+import  org.apache.spark.sql.catalyst
 import operators.logical.{ApproximateAggregate, ApproximateDistinctJoin, ApproximateUniversalJoin, DistinctSample, Quantile, UniformSample, UniformSampleWithoutCI, UniversalSample}
 import operators.physical.{DistinctSampleExec2, DyadicRangeExec, QuantileSampleExec, QuantileSketchExec, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, EqualTo, EquivalentExpressions, Expression, NamedExpression, PythonUDF}
 import org.apache.spark.sql.execution.aggregate.AggUtils
 import org.apache.spark.sql.execution._
-import org.apache.spark.sql.Strategy
+import org.apache.spark.sql.{SparkSession, Strategy}
 import org.apache.spark.sql.catalyst.plans.logical.{Filter, Join, LeafNode, LogicalPlan, Project}
+import org.apache.spark.sql.catalyst.plans.physical.UnknownPartitioning
 
 import scala.collection.Seq
 import scala.collection.mutable.ListBuffer
@@ -188,6 +191,17 @@ object SampleTransformation extends Strategy {
       plans += planLater(Filter(condition, DistinctSample(functions, confidence, error, seed, groupingExpressions, filterChild)))
       plans
     case t@DistinctSample(functions, confidence, error, seed, groupingExpressions, child) =>
+  //   val pathToParquet="/home/hamid/TASTER/materializedSynopsis/Distinct;acheneID|lat|lon|province|isActive|activityStatus|dateOfActivityStart|numberOfEmployees|revenue|EBITDA;0.9;0.1;5427500315423;0;0.05;count(1);legalStatus#92;parquet"
+   //   val name="Distinct;acheneID|lat|lon|province|isActive|activityStatus|dateOfActivityStart|numberOfEmployees|revenue|EBITDA;0.9;0.1;5427500315423;0;0.05;count(1);legalStatus#92;parquet"
+     // if(Files.exists(Paths.get(pathToParquet))){
+     //   val sparkSession = SparkSession.builder
+     //     .appName("Taster")
+      //    .master("local[*]")
+       //   .getOrCreate();
+       //   val rdd=sparkSession.sqlContext.read.parquet(pathToParquet).queryExecution.toRdd
+       //   Seq(new RDDScanExec(t.output,rdd,name,UnknownPartitioning(0),Nil))
+   //   }
+    //    else
       Seq(DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, planLater(child)))
     case t@UniformSample(function, confidence, interval, seed, project@Project(projectList: Seq[NamedExpression], projectChild: LogicalPlan)) =>
       val plans = new ListBuffer[SparkPlan]

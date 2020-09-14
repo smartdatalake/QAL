@@ -24,7 +24,7 @@ abstract class SampleExec(child: SparkPlan) extends UnaryExecNode with CodegenSu
  // val path="/home/sdlhshah/spark-data/materializedSynopsis/"
   var sampleSize:Long=0
   var dataSize=0
-  var fraction=.25
+  var fraction=.05
   val fractionStep=0.001
   val zValue=Array.fill[Double](100)(0.0)
   zValue(99)=2.58
@@ -249,7 +249,7 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
                                groupingExpression:Seq[NamedExpression],
                                child: SparkPlan) extends SampleExec(  child: SparkPlan) {
 
-  val minNumOfOcc = 1500000
+  val minNumOfOcc = 15
   private val epsOfTotalCount = 0.00001
   private val confidenceSketch = 0.99
   private val seed2 = 45423552
@@ -269,9 +269,9 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
     "Distinct;" + child.output.map(_.name).slice(0, 10).mkString("|") + ";" + confidence + ";" + error + ";" + seed + ";" + sampleSize + ";" + fraction + ";" + functions.mkString("_") + ";" + groupingExpression.mkString("_")
 
   protected override def doExecute(): RDD[InternalRow] = {
-    output
+    //   output
     val folder = (new File(path)).listFiles.filter(_.isDirectory)
-/*    for (i <- 0 to folder.size - 1) {
+    /*    for (i <- 0 to folder.size - 1) {
       val sampleInfo = folder(i).getName.split(";")
       val sampleType = sampleInfo(0)
       val confidence = sampleInfo(2).toDouble
@@ -322,7 +322,7 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
     dataSize = input.count().toInt
     while (true) {
       out = input.mapPartitionsWithIndex { (index, iter) => {
-  //      println("in sample")
+        //      println("in sample")
         val sketch: mutable.HashMap[String, Int] = new mutable.HashMap[String, Int]()
         //var sketch = CountMinSketch.create(epsOfTotalCount, confidenceSketch, seed2)
         iter.flatMap { row =>
@@ -410,18 +410,18 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
           }
 
       }*/
-      this.sampleSize=out.count()
-      println("i create a sample")
+      //out.cache()
+      //this.sampleSize=out.count()
+
+      println("i store a sample")
       out.map(x => {
         var stringRow = ""
         for (i <- 0 to x.numFields - 1) {
-          if(x.numFields!=23)
-            println(x.numFields)
           val value = x.get(i, output(i).dataType)
           if (value == null) {
-            stringRow +=  "^"
+            stringRow += ","
           } else
-            stringRow += x.get(i, output(i).dataType) + "^"
+            stringRow += x.get(i, output(i).dataType) + ","
         }
         stringRow.dropRight(1)
       }).saveAsTextFile(path + this.toString())

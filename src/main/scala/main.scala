@@ -8,6 +8,7 @@ import org.apache.spark.sql.catalyst.AliasIdentifier
 import org.apache.spark.sql.{SparkSession, Strategy}
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, ReturnAnswer, SubqueryAlias}
 import org.apache.spark.sql.catalyst.rules.Rule
+import org.apache.spark.sql.execution.RDDScanExec
 import org.apache.spark.sql.types.{BooleanType, DoubleType, IntegerType, LongType, StringType, StructField, StructType, TimestampType}
 import rules.logical.ApproximateInjector
 import rules.physical.{SampleTransformation, SketchPhysicalTransformation}
@@ -33,9 +34,12 @@ object main {
     sparkSession.conf.set("spark.sql.codegen.wholeStage", false); // disable codegen
     import sparkSession.implicits._
 
-    //  val sampleParquet = sparkSession.read.parquet( "/home/hamid/Distinct;acheneID|lat|lon|province|isActive|activityStatus|dateOfActivityStart|numberOfEmployees|revenue|EBITDA;0.9;0.1;5427500315423;999999;0.3;count(1);legalStatus#92;parquet");
-    //  sparkSession.sqlContext.createDataFrame(sampleParquet.rdd, sampleParquet.schema).createOrReplaceTempView("sampleSCV");
-    //  sparkSession.sqlContext.sql("select count(*) from sampleSCV where legalStatus is null").show(2000)
+   //   val sampleParquet = sparkSession.read.parquet( "/home/hamid/Distinct;acheneID|lat|lon|province|isActive|activityStatus|dateOfActivityStart|numberOfEmployees|revenue|EBITDA;0.9;0.1;5427500315423;0;0.05;count(1);legalStatus#92;parquet");
+   //   sparkSession.sqlContext.createDataFrame(sampleParquet.rdd, sampleParquet.schema).createOrReplaceTempView("sampleSCV");
+  //    sparkSession.sqlContext.sql("select count(*),legalStatus from sampleSCV group by legalStatus").show(2000)
+  //    sparkSession.sqlContext.sql("select count(*),s.legalStatus from PFV p, sampleSCV s where p.company_acheneID=s.acheneID and s.revenue>10000 group by s.legalStatus confidence 90 error 10").show(2000)
+    //if we have sample
+
     val seed = 5427500315423L
     val (bench, format, run, plan, option, repeats, currendDir, parentDir, benchDir, dataDir) = analyzeArgs(args);
     val queries = queryWorkload(bench, benchDir)
@@ -43,8 +47,8 @@ object main {
     loadTables(sparkSession, bench, dataDir)
     //sparkSession.sqlContext.sql("select count(numberOfEmployees),numberOfEmployees from PFV p, SCV s where p.company_acheneID= s.acheneID  group by numberOfEmployees").show()
 
-    //  sparkSession.sqlContext.sql("select count(*),legalStatus from  sampleSCV s  group by s.legalStatus").show(20000)
-    //  sparkSession.sqlContext.sql("select count(*),legalStatus from  SCV s  group by s.legalStatus").show(20000)
+  //    sparkSession.sqlContext.sql("select count(*),legalStatus from  sampleSCV s  group by s.legalStatus").show(20000)
+  //    sparkSession.sqlContext.sql("select count(*),legalStatus from  SCV s  group by s.legalStatus").show(20000)
 
     //println(sparkSession.sqlContext.sql("select revenue from SCV s, PFV p where p.company_acheneID=s.acheneID").queryExecution.executedPlan)
     // sparkSession.sqlContext.sql("select avg(p.totalAmount),s.legalStatus from PFV p, SCV s where p.company_acheneID=s.acheneID group by s.legalStatus").show(2000)
@@ -56,7 +60,7 @@ object main {
       val folder = (new File(path)).listFiles.filter(_.isDirectory)
       for (i <- 0 to folder.size - 1) {
         if (!folder(i).getName.contains(".parquet") && !folder.find(_.getName == folder(i).getName + ".parquet").isDefined) {
-          val filename = schemaFolderPath + folder(i).getName
+/*        val filename = schemaFolderPath + folder(i).getName
           var schemaString = ""
           for (line <- Source.fromFile(filename).getLines)
             schemaString = line
@@ -80,11 +84,16 @@ object main {
                 throw new Exception("undefined column type!!!")
             }
           }))
-          println(schema)
+          println(schema)*/
           val view = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "false")
-            .schema(schema).option("delimiter", "^").option("nullValue", "null").load(path + folder(i).getName)
-          view.take(100).foreach(println)
-          view.write.format("parquet").save(path + folder(i).getName + ";parquet");
+            .option("inferSchema", "true").option("delimiter", ",").option("nullValue", "null").load(path + folder(i).getName)
+          view.toDF().groupBy("_c22").count().show(10000)
+          val newColumns = Seq("acheneID","lat","lon" ,"province","isActive","activityStatus","dateOfActivityStart","numberOfEmployees","revenue","EBITDA","balanceSheetClosingDate","flags","ATECO","keywords","taxID","vatID","numberOfBuildings","numberOfPlotsOfLand","numberOfRealEstates","categoryScore","score","updateTime","legalStatus")
+          val df = view.toDF(newColumns:_*)
+       //   view.columns.foreach(println)
+          view.take(10000).foreach(println)
+          println(view.count())
+          df.write.format("parquet").save(path + folder(i).getName + ";parquet");
         }
       }
       //  val clientSocket = server.accept()
@@ -135,6 +144,9 @@ object main {
         // println(sparkSession.sqlContext.sql(query_code).collect.map(x=>x.getLong(0)).reduce(_+_))
         // println("next")
         //    println(sparkSession.sqlContext.sql(query_code).collect.map(x=>x.getLong(0)).reduce(_+_))
+        println(sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan)
+        println(sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan)
+        val plan=sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan
         val out = sparkSession.sqlContext.sql(query_code).collect //.map(x=>x.mkString(",")).foreach(z=>println(z))
         outString = "[" + out.map(row => {
           var rowString = "{"
