@@ -16,15 +16,16 @@ import org.apache.spark.util.sketch.CountMinSketch
 
 import scala.collection.{Seq, mutable}
 import scala.util.Random
+import java.io.PrintWriter
 
 abstract class SampleExec(child: SparkPlan) extends UnaryExecNode with CodegenSupport {
-
-  val pathToSave="/home/hamid/TASTER/materializedSynopsis/"+this.toString()
-  val path="/home/hamid/TASTER/materializedSynopsis/"
- // val path="/home/sdlhshah/spark-data/materializedSynopsis/"
+  val parentDir="/home/hamid/TASTER/"
+  //val parentDir="/home/sdlhshah/spark-data/"
+  val pathToSaveSynopses=parentDir+ "materializedSynopsis/"
+  val pathToSaveSchema=parentDir+ "materializedSchema/"
   var sampleSize:Long=0
   var dataSize=0
-  var fraction=.05
+  var fraction=.1
   val fractionStep=0.001
   val zValue=Array.fill[Double](100)(0.0)
   zValue(99)=2.58
@@ -142,7 +143,7 @@ abstract class SampleExec(child: SparkPlan) extends UnaryExecNode with CodegenSu
 
 case class UniformSampleExec2WithoutCI(seed:Long,child:SparkPlan) extends SampleExec(child) {
   override protected def doExecute(): RDD[InternalRow] = {
-    val folder = (new File(path)).listFiles.filter(_.isDirectory)
+    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for(i <- 0 to folder.size-1){
       val sampleInfo=folder(i).getName.split(";")
       val sampleType=sampleInfo(0)
@@ -152,7 +153,7 @@ case class UniformSampleExec2WithoutCI(seed:Long,child:SparkPlan) extends Sample
       if(sampleType=="Uniform"&&atts==child.output.map(_.name).slice(0,10).mkString("|")) {
           this.sampleSize=sampleSize
           this.fraction=fraction
-          return SparkContext.getOrCreate().objectFile(path+folder(i).getName)
+          return SparkContext.getOrCreate().objectFile(pathToSaveSynopses+folder(i).getName)
         }
     }
     val out= child.execute().sample(false,fraction,seed) /*.mapPartitionsWithIndexInternal { (index, iter) =>
@@ -161,7 +162,7 @@ case class UniformSampleExec2WithoutCI(seed:Long,child:SparkPlan) extends Sample
         else
           Iterator()}*/
     this.sampleSize=out.count().toInt
-    out.saveAsObjectFile(path+this.toString())
+    out.saveAsObjectFile(pathToSaveSynopses+this.toString())
     out
   }
   override def toString(): String =
@@ -177,7 +178,7 @@ case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Dou
   var seenPartition = 0
 
   protected override def doExecute(): RDD[InternalRow] = {
-    val folder = (new File(path)).listFiles.filter(_.isDirectory)
+    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for(i <- 0 to folder.size-1){
       val sampleInfo=folder(i).getName.split(";")
       val sampleType=sampleInfo(0)
@@ -189,7 +190,7 @@ case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Dou
         if(confidence>=this.confidence&&error<=this.error){
           this.sampleSize=sampleSize
           this.fraction=fraction
-          return SparkContext.getOrCreate().objectFile(path+folder(i).getName)
+          return SparkContext.getOrCreate().objectFile(pathToSaveSynopses+folder(i).getName)
         }
     }
     var out: RDD[InternalRow] = null
@@ -234,7 +235,7 @@ case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Dou
       else
         throw new Exception("Operator is not approximatable")
       if (sampleErrorForTargetConfidence < targetError) {
-        out.saveAsObjectFile(path+this.toString())
+        out.saveAsObjectFile(pathToSaveSynopses+this.toString())
         return out
       }
 
@@ -266,11 +267,11 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
   })
 
   override def toString(): String =
-    "Distinct;" + child.output.map(_.name).slice(0, 10).mkString("|") + ";" + confidence + ";" + error + ";" + seed + ";" + sampleSize + ";" + fraction + ";" + functions.mkString("_") + ";" + groupingExpression.mkString("_")
+    "Distinct_" + (child.output.map(_.name).slice(0,15).mkString("") + "_" + confidence + "_" + error + "_" + fraction  + "_" + functions.mkString(".") + "_" + groupingExpression.mkString(".")).replace("(","").replace(")","").replace("#","").replace(".","")
 
   protected override def doExecute(): RDD[InternalRow] = {
     //   output
-    val folder = (new File(path)).listFiles.filter(_.isDirectory)
+    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     /*    for (i <- 0 to folder.size - 1) {
       val sampleInfo = folder(i).getName.split(";")
       val sampleType = sampleInfo(0)
@@ -321,111 +322,114 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
     //todo null are counted
     dataSize = input.count().toInt
     while (true) {
-      out = input.mapPartitionsWithIndex { (index, iter) => {
-        //      println("in sample")
-        val sketch: mutable.HashMap[String, Int] = new mutable.HashMap[String, Int]()
-        //var sketch = CountMinSketch.create(epsOfTotalCount, confidenceSketch, seed2)
-        iter.flatMap { row =>
-          val tempGroupKey = row.get(groupValues(0)._1, groupValues(0)._2)
-          if (tempGroupKey == null)
-            List()
-          else {
-            var thisRowKey: String = tempGroupKey.toString;
-            ///  println(thisRowKey)
-            //groupValues.foreach(x => thisRowKey = thisRowKey + row.get(x._1, x._2));
-            val curCount = sketch.getOrElse(thisRowKey, 0)
-            // val curCount=sketch.estimateCount(thisRowKey);
-            if (curCount > 0) {
-              if (curCount < 2 * minNumOfOcc) {
-                sketch.update(thisRowKey, sketch.getOrElse(thisRowKey, 0) + 1)
-                //sketch.add(thisRowKey)
-                List(row)
-              } else {
-                val newRand = r.nextDouble
-                if (newRand < fraction) {
+        out = input.mapPartitionsWithIndex { (index, iter) => {
+          println("in sample mapPartition for partitionIndex:"+index)
+          val sketch: mutable.HashMap[String, Int] = new mutable.HashMap[String, Int]()
+          //var sketch = CountMinSketch.create(epsOfTotalCount, confidenceSketch, seed2)
+          iter.flatMap { row =>
+            val tempGroupKey = row.get(groupValues(0)._1, groupValues(0)._2)
+            if (tempGroupKey == null)
+              List()
+            else {
+              var thisRowKey: String = tempGroupKey.toString;
+              ///  println(thisRowKey)
+              //groupValues.foreach(x => thisRowKey = thisRowKey + row.get(x._1, x._2));
+              val curCount = sketch.getOrElse(thisRowKey, 0)
+              // val curCount=sketch.estimateCount(thisRowKey);
+              //   if(thisRowKey=="Soggetto Estero")
+              // println(curCount)
+              if (curCount > 0) {
+                if (curCount < 2 * minNumOfOcc) {
+                  sketch.update(thisRowKey, sketch.getOrElse(thisRowKey, 0) + 1)
+                  //sketch.add(thisRowKey)
                   List(row)
                 } else {
-                  List()
+                  val newRand = r.nextDouble
+                  if (newRand < fraction) {
+                    List(row)
+                  } else {
+                    List()
+                  }
                 }
+              } else {
+                sketch.put(thisRowKey, 1)
+                //  sketch.add(thisRowKey)
+                List(row)
               }
-            } else {
-              sketch.put(thisRowKey, 1)
-              //  sketch.add(thisRowKey)
-              List(row)
             }
           }
         }
-      }
-      }
-      /*out = input.mapPartitionsWithIndex { (index, iter) =>
-        var sketch = CountMinSketch.create(epsOfTotalCount, confidenceSketch, seed2)
-        iter.flatMap { row =>
-          val tempGroupKey = row.get(groupValues(0)._1, groupValues(0)._2)
-          if (tempGroupKey == null)
-            List()
-          else {
-            var thisRowKey: String = tempGroupKey.toString;
-            ///  println(thisRowKey)
-            //groupValues.foreach(x => thisRowKey = thisRowKey + row.get(x._1, x._2));
-            val curCount = sketch.estimateCount(thisRowKey);
-            if (curCount > 0) {
-              if (curCount < 2 * minNumOfOcc) {
-                sketch.add(thisRowKey)
-                List(row)
-              } else {
-                val newRand = r.nextDouble
-                if (newRand < fraction) {
+        }
+        /*out = input.mapPartitionsWithIndex { (index, iter) =>
+          var sketch = CountMinSketch.create(epsOfTotalCount, confidenceSketch, seed2)
+          iter.flatMap { row =>
+            val tempGroupKey = row.get(groupValues(0)._1, groupValues(0)._2)
+            if (tempGroupKey == null)
+              List()
+            else {
+              var thisRowKey: String = tempGroupKey.toString;
+              ///  println(thisRowKey)
+              //groupValues.foreach(x => thisRowKey = thisRowKey + row.get(x._1, x._2));
+              val curCount = sketch.estimateCount(thisRowKey);
+              if (curCount > 0) {
+                if (curCount < 2 * minNumOfOcc) {
+                  sketch.add(thisRowKey)
                   List(row)
                 } else {
-                  List()
+                  val newRand = r.nextDouble
+                  if (newRand < fraction) {
+                    List(row)
+                  } else {
+                    List()
+                  }
                 }
+              } else {
+                sketch.add(thisRowKey)
+                List(row)
               }
-            } else {
-              sketch.add(thisRowKey)
-              List(row)
             }
-          }
-        }*/
-      /*  out = input.flatMap {  iter =>
-          var thisRowKey: String = iter.get(groupValues(0)._1, groupValues(0)._2).toString;
+          }*/
+        /*  out = input.flatMap {  iter =>
+            var thisRowKey: String = iter.get(groupValues(0)._1, groupValues(0)._2).toString;
 
-          //groupValues.foreach(x => thisRowKey = thisRowKey + iter.get(x._1, x._2));
-          val curCount = sketch.estimateCount(thisRowKey);
-          if (curCount > 0) {
-            if (curCount < minNumOfOcc) {
-              sketch.add(thisRowKey)
-              List(iter)
-            } else {
-              val newRand = r.nextDouble
-              if (newRand < fraction) {
+            //groupValues.foreach(x => thisRowKey = thisRowKey + iter.get(x._1, x._2));
+            val curCount = sketch.estimateCount(thisRowKey);
+            if (curCount > 0) {
+              if (curCount < minNumOfOcc) {
                 sketch.add(thisRowKey)
                 List(iter)
               } else {
-                List()
+                val newRand = r.nextDouble
+                if (newRand < fraction) {
+                  sketch.add(thisRowKey)
+                  List(iter)
+                } else {
+                  List()
+                }
               }
+            } else {
+              sketch.add(thisRowKey)
+              List(iter)
             }
-          } else {
-            sketch.add(thisRowKey)
-            List(iter)
+
+        }*/
+
+        println("the next command is save the sample")
+        out.map(x => {
+          var stringRow = ""
+          for (i <- 0 to x.numFields - 1) {
+            val value = x.get(i, output(i).dataType)
+            if (value == null) {
+              stringRow += ","
+            } else
+              stringRow += x.get(i, output(i).dataType) + ","
           }
+          stringRow.dropRight(1)
+        }).saveAsTextFile(pathToSaveSynopses + this.toString())
+        new PrintWriter(pathToSaveSchema+this.toString()) { write(output.map(_.toAttribute.name).mkString(",")); close }
+        println("I have stored the sample")
 
-      }*/
-      //out.cache()
-      //this.sampleSize=out.count()
-
-      println("i store a sample")
-      out.map(x => {
-        var stringRow = ""
-        for (i <- 0 to x.numFields - 1) {
-          val value = x.get(i, output(i).dataType)
-          if (value == null) {
-            stringRow += ","
-          } else
-            stringRow += x.get(i, output(i).dataType) + ","
-        }
-        stringRow.dropRight(1)
-      }).saveAsTextFile(path + this.toString())
-      return out
+        return out
       val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
       var sampleErrorForTargetConfidence = 0.0
       var targetError = 0.0
@@ -460,7 +464,7 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
 
 
       if (sampleErrorForTargetConfidence <= targetError) {
-        out.saveAsObjectFile(path + this.toString())
+        out.saveAsObjectFile(pathToSaveSynopses + this.toString())
         return out
       }
       fraction += fractionStep
@@ -493,7 +497,7 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
   }
 
   override protected def doExecute(): RDD[InternalRow] = {
-    val folder = (new File(path)).listFiles.filter(_.isDirectory)
+/*    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for (i <- 0 to folder.size - 1) {
       val sampleInfo = folder(i).getName.split(";")
       val sampleType = sampleInfo(0)
@@ -506,9 +510,9 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
         if (confidence >= this.confidence && error <= this.error) {
           this.sampleSize = sampleSize
           this.fraction = fraction
-          return SparkContext.getOrCreate().objectFile(path + folder(i).getName)
+          return SparkContext.getOrCreate().objectFile(pathToSaveSynopses + folder(i).getName)
         }
-    }
+    }*/
     //todo multiple join key
     var out: RDD[InternalRow] = null
     val input = child.execute()
@@ -530,7 +534,7 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
       }
       if(functions==null) {
         this.sampleSize=out.count().toInt
-        out.saveAsObjectFile(path + this.toString())
+        out.saveAsObjectFile(pathToSaveSynopses + this.toString())
         return out
       }
       val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
@@ -563,7 +567,7 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
       else
         throw new Exception("Operator is not approximatable")
       if (sampleErrorForTargetConfidence < targetError) {
-        out.saveAsObjectFile(path + this.toString())
+        out.saveAsObjectFile(pathToSaveSynopses + this.toString())
         //out.saveAsTextFile(path + this.toString())
 
         return out
