@@ -35,14 +35,14 @@ object CreateAtokaParquet {
     val DATA_DIR = PARENT_DIR + "data_" + format + "/";
 
 
-    val SCV = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "true")
-      .option("inferSchema", "true").option("delimiter", ",").option("nullValue", "null").load(DATA_DIR + "SCV.csv")
+    //val SCV = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "true")
+     // .option("inferSchema", "true").option("delimiter", ",").option("nullValue", "null").load(DATA_DIR + "SCV.csv")
    // sparkSession.sqlContext.createDataFrame(SCV.rdd, SCV.schema).repartition(13).createOrReplaceTempView("SCV");
-    SCV.write.format("parquet").save(PARENT_DIR + "data_parquet/SCV.parquet");
-    //val PFV = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "true")
-    //  .option("inferSchema", "true").option("delimiter", ",").option("nullValue", "null").load(DATA_DIR + "PFV.csv")
+    //SCV.write.format("parquet").save(PARENT_DIR + "data_parquet/SCV.parquet");
+    val PFV = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "true")
+      .option("inferSchema", "true").option("delimiter", ",").option("nullValue", "null").load(DATA_DIR + "PFV.csv")
     //sparkSession.sqlContext.createDataFrame(PFV.rdd, PFV.schema).repartition(13).createOrReplaceTempView("PFV");
-   // PFV.write.format("parquet").save(PARENT_DIR + "data_parquet/PFV.parquet");
+    PFV.write.format("parquet").save(PARENT_DIR + "data_parquet/PFV.parquet");
 
    // val temp = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "true")
   //    .option("inferSchema", "true").option("delimiter", ";").option("nullValue", "null").load(DATA_DIR + "BRS10K.csv")

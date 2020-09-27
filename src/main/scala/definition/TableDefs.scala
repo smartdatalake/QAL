@@ -2,7 +2,7 @@ package definition
 
 import java.io.File
 
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{Dataset, SparkSession}
 import org.apache.spark.sql.types._
 
 object TableDefs {
@@ -979,6 +979,8 @@ object TableDefs {
     sparkSession.sqlContext.createDataFrame(SCV.rdd, SCV.schema).createOrReplaceTempView("SCV");
     val PFV = sparkSession.read.parquet(DATA_DIR + "PFV.parquet");
     sparkSession.sqlContext.createDataFrame(PFV.rdd, PFV.schema).createOrReplaceTempView("PFV");
+    val BRS = sparkSession.read.parquet(DATA_DIR + "BRS10K.parquet");
+    sparkSession.sqlContext.createDataFrame(BRS.rdd, BRS.schema).createOrReplaceTempView("BRS");
     //val XXX = sparkSession.read.parquet(DATA_DIR + "XXX.parquet");
     //sparkSession.sqlContext.createDataFrame(XXX.rdd, XXX.schema).createOrReplaceTempView("XXX");
   }

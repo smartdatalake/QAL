@@ -83,16 +83,22 @@ case class QuantileSampleExec(quantileColAtt:AttributeReference,quantilePart:Int
   override protected def doExecute(): RDD[InternalRow] = {
     val result = new ListBuffer[UnsafeRow]
     val size = child.execute().count()
-    val points = child.execute.map(x => x.getInt(0)).sortBy(x => x).collect().sliding((size / (quantilePart-1)).toInt, (size / (quantilePart-1)).toInt).map(x => x.last).toList
+    val list=child.execute.map(x => x.getInt(0)).sortBy(x => x).collect().toList
+    list.takeRight(1000)
     var percent = 100 / quantilePart.toDouble
-    for (point <- points) {
+    for(i<- 0 until list.size by list.size/quantilePart){
       val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
       row.setDouble(0, percent)
-      row.setInt(1, point)
+      row.setInt(1, list(i))
       val x = UnsafeProjection.create(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
       if(percent<100)
         result += x(row)
       percent += (100 / quantilePart)
+    }
+    val points = child.execute.map(x => x.getInt(0)).sortBy(x => x).collect().sliding((size / (quantilePart-1)).toInt, (size / (quantilePart-1)).toInt).map(x => x.last).toList
+
+    for (point <- points) {
+
     }
     SparkContext.getOrCreate().parallelize(result)
   }

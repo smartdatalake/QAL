@@ -1,29 +1,50 @@
 package extraSQLOperators
 
 import operators.logical.{Binning, Quantile, UniformSampleWithoutCI}
+import operators.physical.{DistinctSampleExec2, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
-import org.apache.spark.sql.catalyst.plans.logical.ReturnAnswer
+import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
+import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, ReturnAnswer, SubqueryAlias}
+import org.apache.spark.sql.execution.{LogicalRDD, RDDScanExec, SparkPlan}
 import org.apache.spark.sql.types._
+import rules.physical.{SketchPhysicalTransformation, SketchTransformation}
+
+import scala.collection.{Seq, mutable}
 
 object extraSQLOperators {
-  def execQuantile(sparkSession: SparkSession, tempQuery: String,table :String, quantileCol: String, quantilePart: Int
+  def execQuantile(sparkSession: SparkSession, tempquery: String,table :String, quantileCol: String, quantilePart: Int
                    , confidence: Double, error: Double, seed: Long):String = {
-    if (tempQuery.size<10) {
+    var quantileColAtt: AttributeReference = null
+    var tempQuery=tempquery
+    if (tempQuery.size<40) {
       var out = "["
       val scan = sparkSession.sqlContext.sql("select * from " + table).queryExecution.optimizedPlan
-      var quantileColAtt: AttributeReference = null
       for (p <- scan.output.toList)
         if (p.name == quantileCol)
           quantileColAtt = p.asInstanceOf[AttributeReference]
+      sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation)
+
       val optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0)
       optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.get(0) + ",\"value\":" + x.get(1) + "}," + "\n"))
       return out.dropRight(2) + "]"
     }
+    val scan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
+
+    val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
+    recursiveProcess(sparkSession.sqlContext.sql(tempQuery).queryExecution.analyzed, logicalPlanToTable)
+    val sampleParquetToTable: mutable.HashMap[String, String] = new mutable.HashMap()
+    getTableNameToSampleParquet( sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0), logicalPlanToTable, sampleParquetToTable)
+    for (a <- sampleParquetToTable.toList) {
+      if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase)) {
+        tempQuery = tempQuery.replace(a._2.toUpperCase, a._1)
+        sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling)
+        sparkSession.experimental.extraOptimizations = Seq()
+      }
+    }
    var out = "["
     println(sparkSession.sqlContext.sql(tempQuery).queryExecution.executedPlan)
     val plan=sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
-    var quantileColAtt: AttributeReference = null
     for (p <- plan.output.toList)
       if (p.name == quantileCol)
         quantileColAtt = p.asInstanceOf[AttributeReference]
@@ -31,7 +52,8 @@ object extraSQLOperators {
       , error, seed, plan)).executedPlan
     //optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += (x.mkString(";") + "\n"))
     println(optimizedPhysicalPlans)
-    optimizedPhysicalPlans.executeCollect().foreach(x => out += ("{\"percent\":" + x.getDouble(0) + ",\"value\":" + x.getInt(1) + "},"+"\n"))
+
+    optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.getDouble(0) + ",\"value\":" + x.getInt(1) + "},"+"\n"))
     out=out.dropRight(2) + "]"
     println(out)
     out
@@ -39,6 +61,7 @@ object extraSQLOperators {
 
   def execBinning(sparkSession: SparkSession, table: String, binningCol: String, binningPart: Int
                   , binningStart: Double, binningEnd: Double, confidence: Double, error: Double, seed: Long) = {
+    sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation)
     var out = "["
     val scan = sparkSession.sqlContext.sql("select * from " + table).queryExecution.optimizedPlan
     var binningColAtt: AttributeReference = null
@@ -55,8 +78,21 @@ object extraSQLOperators {
   def execDataProfile(sparkSession: SparkSession, dataProfileTable: String, confidence: Double, error: Double
                       , seed: Long) = {
     var out = "["
-    val scan = sparkSession.sqlContext.sql("select * from " + dataProfileTable).queryExecution.optimizedPlan
-    val optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(UniformSampleWithoutCI(seed, scan))).toList(0)
+    var query_code="select * from " + dataProfileTable
+    val scan = sparkSession.sqlContext.sql(query_code).queryExecution.optimizedPlan
+    var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(UniformSampleWithoutCI(seed, scan))).toList(0)
+    val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
+    recursiveProcess(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed, logicalPlanToTable)
+    val sampleParquetToTable: mutable.HashMap[String, String] = new mutable.HashMap()
+    getTableNameToSampleParquet(optimizedPhysicalPlans, logicalPlanToTable, sampleParquetToTable)
+    for (a <- sampleParquetToTable.toList) {
+      if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase)) {
+        query_code = query_code.replace(a._2.toUpperCase, a._1)
+        sparkSession.experimental.extraStrategies = Seq()
+        sparkSession.experimental.extraOptimizations = Seq()
+        optimizedPhysicalPlans=sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan
+      }
+    }
     val fraction = 10
     val schema = optimizedPhysicalPlans.schema
     val columns = optimizedPhysicalPlans.schema.toList.map(x => Array[Double](x.dataType match {
@@ -85,7 +121,7 @@ object extraSQLOperators {
       case _ =>
         11
     }, 0, 0, 0, 0, 0, 0, 0, 0))
-    optimizedPhysicalPlans.executeCollectPublic().foreach(x => for (i <- 0 to columns.size - 1) {
+    optimizedPhysicalPlans.executeCollect.foreach(x => for (i <- 0 to columns.size - 1) {
       if (!x.isNullAt(i)) {
         columns(i)(1) += 1
         columns(i)(0) match {
@@ -182,4 +218,31 @@ object extraSQLOperators {
     s.foreach(x => out += (x + "\n"))
     out.dropRight(2) + "]"
   }
+
+  def getTableNameToSampleParquet(in: SparkPlan, logicalToTable: mutable.HashMap[String, String], map: mutable.HashMap[String, String]): Unit = {
+    in match {
+      case sample@ UniformSampleExec2(functions, confidence, error, seed, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
+        map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
+      case sample@UniformSampleExec2WithoutCI(seed,child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
+        map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
+      case sample@UniversalSampleExec2(functions, confidence, error, seed, joinKey, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
+        map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
+      case sample@DistinctSampleExec2(functions, confidence, error, seed, groupingExpression, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
+        map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
+      case _ =>
+        in.children.map(child => getTableNameToSampleParquet(child, logicalToTable, map))
+    }
+  }
+
+  def recursiveProcess(in: LogicalPlan, map: mutable.HashMap[String, String]): Unit = {
+    in match {
+      case SubqueryAlias(name1, child@SubqueryAlias(name2, lr@LogicalRDD(output, rdd, o, p, f))) =>
+        map.put(output.map(_.name).slice(0, 15).mkString(""), name2.identifier)
+      case SubqueryAlias(name2, lr@LogicalRDD(output, rdd, o, p, f)) =>
+        map.put(output.map(_.name).slice(0, 15).mkString(""), name2.identifier)
+      case _ =>
+        in.children.map(child => recursiveProcess(child, map))
+    }
+  }
+
 }

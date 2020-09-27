@@ -104,7 +104,8 @@ object SampleTransformation extends Strategy {
             planLater(DistinctSample(functionsWithDistinct, confidence, error, seed, groupingExpressions, child)))
         }
       //todo fix fraction
-      Seq(ScaleAggregateSampleExec(confidence, error, seed, 0.25, resultExpressions, withDistinctSample(0)))
+      withDistinctSample
+     // Seq(ScaleAggregateSampleExec(confidence, error, seed, 0.25, resultExpressions, withDistinctSample(0)))
     case ApproximatePhysicalAggregationSample(confidence, error, seed, hasJoin, groupingExpressions, functionsWithDistinct: Seq[AggregateExpression]
     , functionsWithoutDistinct: Seq[AggregateExpression], resultExpressions, child)
       if (hasJoin == false && groupingExpressions.isEmpty) =>
@@ -139,8 +140,9 @@ object SampleTransformation extends Strategy {
             planLater(DistinctSample(functionsWithDistinct, confidence, error, seed, groupingExpressions, child)))
         }
       //todo fix fraction
-      Seq(ScaleAggregateSampleExec(confidence, error, seed, 0.1, resultExpressions, withUniformSample(0)),
-        ScaleAggregateSampleExec(confidence, error, seed, 0.1, resultExpressions, withDistinctSample(0)))
+      withDistinctSample
+   //   Seq(ScaleAggregateSampleExec(confidence, error, seed, 0.1, resultExpressions, withUniformSample(0)),
+   //     ScaleAggregateSampleExec(confidence, error, seed, 0.1, resultExpressions, withDistinctSample(0)))
 
     case t@ApproximateDistinctJoin(confidence, error, seed, func, grouping, filter@Filter(condition: Expression, filterChild: LogicalPlan)) =>
       Seq(FilterExec(condition, planLater(ApproximateDistinctJoin(confidence, error, seed, func, grouping, filterChild))))

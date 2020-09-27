@@ -1,6 +1,7 @@
-import java.io.{BufferedReader, File, InputStreamReader}
+import java.io.{BufferedReader, File, FileReader, FilenameFilter, InputStreamReader}
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
+import java.security.UnresolvedPermission
 
 import definition.TableDefs
 import extraSQLOperators.extraSQLOperators
@@ -17,27 +18,34 @@ import util.control.Breaks._
 import scala.collection.{Seq, mutable}
 import scala.collection.mutable.ListBuffer
 import scala.io.Source
-import java.io.FilenameFilter
-import java.io.FilenameFilter
+import java.util
+import java.util.{HashMap, Random}
 import java.util.regex.Pattern
 
 import operators.logical.DistinctSample
-import operators.physical.DistinctSampleExec2
+import operators.physical.{DistinctSampleExec2, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.catalyst.expressions.NamedExpression
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.expressions._
 
+import scala.reflect.io.Directory
 object main {
   val parentDir = "/home/hamid/TASTER/"
-  //val parentDir="/home/sdlhshah/spark-data/"
+ // val parentDir="/home/sdlhshah/spark-data/"
   val pathToSaveSynopses = parentDir + "materializedSynopsis/"
   val pathToSaveSchema = parentDir + "materializedSchema/"
+  val pathToCIStats = parentDir + "CIstats/"
 
+  val startSamplingRate = 5
+  val stopSamplingRate = 50
+  val samplingStep = 5
   def main(args: Array[String]): Unit = {
     val sparkSession = SparkSession.builder
       .appName("Taster")
-      .master("local[*]")
+         .master("local[*]")
       .getOrCreate();
+
     System.setProperty("geospark.global.charset", "utf8")
     sparkSession.sparkContext.setLogLevel("ERROR");
     sparkSession.conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
@@ -48,53 +56,47 @@ object main {
     val queries = queryWorkload(bench, benchDir)
     val (extraOpt, extraStr) = setRules(option)
     loadTables(sparkSession, bench, dataDir)
-
+    /*sparkSession.sqlContext.sql("select count(numberOfEmployees),numberOfEmployees from SCV s group by numberOfEmployees").show(1000)
+    sparkSession.sqlContext.sql("select count(*) from SCV s, PFV p where s.acheneID==p.company_acheneID and numberOfEmployees>0 ").show(1000)
+    sparkSession.sqlContext.sql("select count(*) from SCV s, PFV p where s.acheneID==p.company_acheneID and numberOfEmployees>1 ").show(1000)
+    sparkSession.sqlContext.sql("select count(*) from SCV s, PFV p where s.acheneID==p.company_acheneID and numberOfEmployees>2 ").show(1000)
+    sparkSession.sqlContext.sql("select count(*) from SCV s, PFV p where s.acheneID==p.company_acheneID and numberOfEmployees>3 ").show(1000)
+    throw new Exception("Done")*/
     val server = new ServerSocket(4545)
-    println("Serve initialized:")
-    //  while (true) {
+    // println("Server initialized:")
+    // while (true) {
     for (query <- queries) {
-      val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
-      for (i <- 0 to folder.size - 1) {
-        if (!folder(i).getName.contains("_parquet") && !folder.find(_.getName == folder(i).getName + "_parquet").isDefined) {
-          val f = new File(pathToSaveSynopses + folder(i).getName)
-          val filenames = f.listFiles(new FilenameFilter() {
-            override def accept(dir: File, name: String): Boolean = name.startsWith("part-")
-          })
-          var header: Seq[String] = null
-          for (line <- Source.fromFile(pathToSaveSchema + folder(i).getName).getLines)
-            header = line.split(',').toSeq
-
-          val sqlcontext = sparkSession.sqlContext
-          var theUnion: DataFrame = null
-          for (file <- filenames) {
-            val d = sqlcontext.read.format("com.databricks.spark.csv").option("delimiter", ",").load(file.getPath)
-            if (theUnion == null) theUnion = d
-            else theUnion = theUnion.union(d)
-          }
-          theUnion.toDF(header: _*).write.format("parquet").save(pathToSaveSynopses + folder(i).getName + "_parquet");
+      var outString = ""
+      /*val clientSocket = server.accept()
+      val input = clientSocket.getInputStream()
+      val output = clientSocket.getOutputStream()
+      var query = java.net.URLDecoder.decode(new BufferedReader(new InputStreamReader(input)).readLine, StandardCharsets.UTF_8.name)
+      println(query)
+      breakable {
+        if (!query.contains("GET /QAL?query=")) {
+          outString = "{'status':404,'message':\"Wrong REST request!!!\"}"
+          val responseDocument = (outString).getBytes("UTF-8")
+          val responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+          output.write(responseHeader)
+          output.write(responseDocument)
+          input.close()
+          output.close()
+          break()
         }
       }
-      updateSynopsesView(sparkSession, pathToSaveSynopses)
-      //  val clientSocket = server.accept()
-      // val input = clientSocket.getInputStream()
-      //  val output = clientSocket.getOutputStream()
-      // try {
-      //   var query = java.net.URLDecoder.decode(new BufferedReader(new InputStreamReader(input)).readLine, StandardCharsets.UTF_8.name)
-      //   breakable {
-      //      if (!query.contains("GET /QAL?query=")) {
-      //    outString = "{'status':400,'message':\"Wrong REST request!!!\"}"
-      //    break()
-      //  }
-      //   }
-      //  query = query.replace("GET /QAL?query=", "").replace(" HTTP/1.1", "")
+      query = query.replace("GET /QAL?query=", "").replace(" HTTP/1.1", "")
+      try {*/
+      convertSampleTextToParquet(sparkSession)
+      updateSynopsesView(sparkSession)
       var (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
       , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
       sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed));
       sparkSession.experimental.extraStrategies = extraStr;
+      //val p=sparkSession.sqlContext.sql("select count(s.legalStatus),s.legalStatus from PFV p, SCV s where p.company_acheneID=s.acheneID  group by s.legalStatus").queryExecution.executedPlan
+
       println("Query:")
       println(query_code)
       val time = System.nanoTime()
-      var outString = ""
       if (quantileCol != "") {
         outString = extraSQLOperators.execQuantile(sparkSession, tempQuery, table, quantileCol, quantilePart, confidence, error, seed)
       } else if (binningCol != "")
@@ -102,45 +104,30 @@ object main {
       else if (dataProfileTable != "")
         outString = extraSQLOperators.execDataProfile(sparkSession, dataProfileTable, confidence, error, seed)
       else if (plan) {
+        val l=sparkSession.sessionState.catalog.lookupRelation(new  org.apache.spark.sql.catalyst.TableIdentifier("SCV",None))
         val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
         recursiveProcess(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed, logicalPlanToTable)
+        sparkSession.sqlContext.sql(query_code).queryExecution.logical
         val sampleParquetToTable: mutable.HashMap[String, String] = new mutable.HashMap()
-        getTableNameToSampleParquet(sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan, logicalPlanToTable, sampleParquetToTable)
+        val sampleRate: mutable.HashSet[Double] = new mutable.HashSet[Double]()
+        var p = sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan
+        setDistinctSampleCI(p, sampleRate)
+        getTableNameToSampleParquet(p, logicalPlanToTable, sampleParquetToTable)
         for (a <- sampleParquetToTable.toList) {
-          if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase))
+          if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase)) {
             query_code = query_code.replace(a._2.toUpperCase, a._1)
+            sparkSession.experimental.extraStrategies = Seq()
+            sparkSession.experimental.extraOptimizations = Seq()
+            p = sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan
+          }
         }
-
-        //   sampleParquetToTable.foreach()
-        query_code
-
-     //   sparkSession.experimental.extraStrategies = Seq()
-    //    sparkSession.experimental.extraOptimizations = Seq()
-        var time=System.nanoTime()
-        sparkSession.sqlContext.sql(query_code).show(20000)
-        println((System.nanoTime()-time)/1000000000)
-
-        throw new Exception("Done")
-        //  println(sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan)
         val col = sparkSession.sqlContext.sql(query_code).columns
         val minNumberOfOcc = 15
         val partCNT = 15
-        var fraction = (18 / 4)
+        val fraction = 1 / sampleRate.toList(0)
 
-        //    if(query_code.contains(" group by s.province"))
-        //      fraction=
-        //     time=System.nanoTime()
-        //  sparkSession.sqlContext.sql(query_code).show(20000)
-        // println(sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan)
-        //  println("Approximate execution time with generating sample:"+(System.nanoTime()-time)/100000)
-        //   time=System.nanoTime()
-        // println(sparkSession.sqlContext.sql(query_code).collect.map(x=>x.getLong(0)).reduce(_+_))
-        // println("next")
-        //    println(sparkSession.sqlContext.sql(query_code).collect.map(x=>x.getLong(0)).reduce(_+_))
         println(sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan)
-        println(sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan)
-        val plan = sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan
-        val out = sparkSession.sqlContext.sql(query_code).collect //.map(x=>x.mkString(",")).foreach(z=>println(z))
+        val out = p.executeCollectPublic() //sparkSession.sqlContext.sql(query_code).collect
         outString = "[" + out.map(row => {
           var rowString = "{"
           for (i <- 0 to col.size - 1) {
@@ -164,52 +151,26 @@ object main {
             }
           }
           rowString.dropRight(1) + "}"
-        }).toArray.mkString(",\n") + "]"
-        // println(outString)
-        /*println("Approximate execution time with prepared sample:"+(System.nanoTime()-time)/100000)
-        val rawPlan = sparkSession.sqlContext.sql(query_code).queryExecution.analyzed
-        val optimizedLogicalPlan = sparkSession.sqlContext.sql(query_code).queryExecution.optimizedPlan
-        //val optimizedPhysicalPlans = sparkSession.sessionState.executePlan(optimizedLogicalPlan).executedPlan
-        //  optimizedPhysicalPlans.executeCollect().foreach(x => println( x.getInt(0)))
-
-
-        println(sparkSession.sessionState.planner.plan(ReturnAnswer(sparkSession.sharedState.cacheManager.useCachedData(sparkSession.sessionState.optimizer.execute(optimizedLogicalPlan)))).toList(0))
-        val x = sparkSession.sessionState.planner.plan(ReturnAnswer(sparkSession.sharedState.cacheManager.useCachedData(sparkSession.sessionState.optimizer.execute(optimizedLogicalPlan)))).toList(0)
-        println(x.executeCollectPublic().toList.size)
-        // val optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(optimizedLogicalPlan)).toList(0)
-        val optimizedPhysicalPlans = sparkSession.sessionState.executePlan(optimizedLogicalPlan).executedPlan
-        println("Raw Plans:")
-        println(rawPlan)
-        println("Optimized Approximate Plan:")
-        println(optimizedLogicalPlan)
-        println("Optimized Physical Plans:")
-        println(optimizedPhysicalPlans)
-        //     for (optimizedPhysicalPlans <- sparkSession.sessionState.planner.plan(ReturnAnswer(optimizedLogicalPlan)).toList) {
-        //     println("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
-        //            println(optimizedPhysicalPlans.children(0).children(0).children(0).executeCollectPublic().size)
-        //          println(optimizedPhysicalPlans.children(0).children(0).children(0).executeCollectPublic().size)
-
-        optimizedPhysicalPlans.executeCollectPublic().foreach(x => outString += (x + "\n"))
-        println(optimizedPhysicalPlans.executeCollectPublic().size)
-        println(outString)*/
-        //}
-        //   val responseDocument = (outString).getBytes("UTF-8")
-
-        //    val responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
-
-
+        }).mkString(",\n") + "]"
       }
+      println(outString)
       println("Execution time: " + (System.nanoTime() - time) / 100000000)
-
-      //  val responseDocument = (outString).getBytes("UTF-8")
-
-      //  val responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
-
-      //   output.write(responseHeader)
-      //  output.write(responseDocument)
-      //   input.close()
-      //  output.close()
-
+      /*    val responseDocument = (outString).getBytes("UTF-8")
+        val responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+        output.write(responseHeader)
+        output.write(responseDocument)
+        input.close()
+        output.close()
+      }
+      catch {
+        case e:Exception=>
+          val responseDocument = ("{'status':404,'message':\""+e.getMessage+"\"}").getBytes("UTF-8")
+          val responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+          output.write(responseHeader)
+          output.write(responseDocument)
+          input.close()
+          output.close()
+      }*/
     }
   }
 
@@ -225,8 +186,47 @@ object main {
   //     output.close()
   //  }
 
+  def convertSampleTextToParquet(sparkSession: SparkSession) = {
+    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
+    for (i <- 0 to folder.size - 1) {
+      try {
+        if ((folder(i).getName.contains("Uniform_") || folder(i).getName.contains("Distinct_") || folder(i).getName.contains("Universal_")) && !folder(i).getName.contains("_parquet") && !folder.find(_.getName == folder(i).getName + "_parquet").isDefined) {
+          val f = new File(pathToSaveSynopses + folder(i).getName)
+          val filenames = f.listFiles(new FilenameFilter() {
+            override def accept(dir: File, name: String): Boolean = name.startsWith("part-")
+          })
+          var header: Seq[String] = null
+          for (line <- Source.fromFile(pathToSaveSchema + folder(i).getName).getLines)
+            header = line.split(',').toSeq
+
+          val sqlcontext = sparkSession.sqlContext
+          var theUnion: DataFrame = null
+          for (file <- filenames) {
+            val d = sqlcontext.read.format("com.databricks.spark.csv").option("delimiter", ",").load(file.getPath)
+            if (d.columns.size != 0) {
+              if (theUnion == null) theUnion = d
+              else theUnion = theUnion.union(d)
+            }
+          }
+          theUnion.toDF(header: _*).write.format("parquet").save(pathToSaveSynopses + folder(i).getName + "_parquet");
+        }
+      }
+      catch {
+        case _ =>
+          val directory = new Directory(new File(folder(i).getAbsolutePath))
+          directory.deleteRecursively()
+      }
+    }
+  }
+
   def getTableNameToSampleParquet(in: SparkPlan, logicalToTable: mutable.HashMap[String, String], map: mutable.HashMap[String, String]): Unit = {
     in match {
+      case sample@UniformSampleExec2(functions, confidence, error, seed, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
+        map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
+      case sample@UniformSampleExec2WithoutCI(seed, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
+        map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
+      case sample@UniversalSampleExec2(functions, confidence, error, seed, joinKey, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
+        map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
       case sample@DistinctSampleExec2(functions, confidence, error, seed, groupingExpression, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
         map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
       case _ =>
@@ -243,13 +243,13 @@ object main {
     }
   }
 
-  def updateSynopsesView(sparkSession: SparkSession, pathToSynopsesFolder: String): Unit = {
+  def updateSynopsesView(sparkSession: SparkSession): Unit = {
     val existingView = sparkSession.sqlContext.tableNames()
-    val folder = (new File(pathToSynopsesFolder)).listFiles.filter(_.isDirectory)
+    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for (i <- 0 to folder.size - 1) {
       if (folder(i).getName.contains("_parquet") && !existingView.contains(folder(i).getName)) {
-        val view = sparkSession.read.parquet(pathToSynopsesFolder + folder(i).getName);
-        sparkSession.sqlContext.createDataFrame(view.rdd, view.schema).createOrReplaceTempView("Distinct_acheneIDlatlonprovinceisActiveactivityStatusdateOfActivityStartnumberOfEmployeesrevenueEBITDAbalanceSheetClosingDateflagsATECOkeywordstaxID_09_01_01_count1_legalStatus92_parquet" /*folder(i).getName*/);
+        val view = sparkSession.read.parquet(pathToSaveSynopses + folder(i).getName);
+        sparkSession.sqlContext.createDataFrame(view.rdd, view.schema).createOrReplaceTempView(folder(i).getName);
       }
     }
   }
@@ -369,7 +369,7 @@ object main {
     if (option.equals("precise") || option.contains("offline"))
       (Seq(), Seq())
     else if (option.equals("taster"))
-      (Seq(), Seq(/*SketchPhysicalTransformation,*/ SampleTransformation))
+      (Seq(), Seq(SketchPhysicalTransformation, SampleTransformation))
     else
       throw new Exception("The engine is not defined")
   }
@@ -411,6 +411,91 @@ object main {
     }
     (inputDataBenchmark, inputDataFormat, run, plan, engine, repeats, CURRENTSTATE_DIR, PARENT_DIR, BENCH_DIR
       , PARENT_DIR + "data_" + inputDataFormat + "/")
+  }
+
+  val threshold = 1000
+
+  @throws[Exception]
+  def countLines(filename: String): Long = {
+    var cnt = 0
+    val br = new BufferedReader(new FileReader(filename))
+    while ( {
+      br.ready
+    }) {
+      br.readLine
+      cnt += 1
+    }
+    cnt - 1
+  }
+
+  def setDistinctSampleCI(in:SparkPlan,sampleRate:mutable.HashSet[Double]):Unit= {
+    in match {
+      case sample@DistinctSampleExec2(functions, confidence, error, seed, groupingExpression, child) =>
+        val aggr = if (functions != null && functions.map(_.toString()).find(x => (x.contains("count(") || x.contains("sum("))).isDefined) 1 else 0
+        val ans2 = new util.HashMap[String, Array[Double]]
+        val folder = (new File(pathToCIStats)).listFiles.filter(_.isFile)
+        var CIStatTable = ""
+        for (i <- 0 to folder.size - 1) {
+          val br = new BufferedReader(new FileReader(folder(i).getAbsolutePath))
+          if (sample.output.map(_.toAttribute.name).mkString(",") == br.readLine) {
+            CIStatTable = folder(i).getName.split("\\.").slice(0, 2).mkString("\\.").replace("\\", "")
+            while (br.ready) {
+              val key = br.readLine
+              val vall = br.readLine
+              val v = vall.split(",")
+              val vd = new Array[Double](v.length)
+              for (i <- 0 until v.length) {
+                vd(i) = v(i).toDouble
+              }
+              ans2.put(key, vd)
+            }
+            br.close()
+          }
+        }
+        val att = if (functions.map(_.aggregateFunction.toString()).take(1)(0).contains("count(1)")) {
+          groupingExpression.map(_.name).take(1)(0)
+        } else {
+          functions.map(x => x.aggregateFunction.children(0).asInstanceOf[AttributeReference].name).take(1)(0)
+        }
+        sample.fraction = findMinSample(ans2, CIStatTable, att, (confidence * 100).toInt, error, aggr) / 100.0
+        sampleRate.add(sample.fraction)
+      case sample@UniversalSampleExec2(functions, confidence, error, seed, joinKey, child) =>
+        sampleRate.add(sample.fraction)
+      case _ =>
+        in.children.map(x => setDistinctSampleCI(x, sampleRate))
+    }
+  }
+
+  private def getSignature(filename: String, samplingRate: Int, i: Int, proportionWithin: Int, useAttributeName: Boolean, header: Array[String]) = if (!useAttributeName) filename + "," + proportionWithin + "," + samplingRate + "," + i
+  else filename + "," + proportionWithin + "," + samplingRate + "," + header(i)
+
+  private def getSignature(filename: String, samplingRate: Int, attrname: String, proportionWithin: Int) = "SCV.csv" + "," + proportionWithin + "," + samplingRate + "," + attrname
+
+  private def findMinSample(answers: util.HashMap[String, Array[Double]], filename: String, attrname: String, desiredConfidence: Int, desiredError: Double, aggr: Int): Int = { // aggr is 0 for avg or 1 for sum
+    val proportionWithin: Int = desiredConfidence
+    for (samplingRate <- startSamplingRate to stopSamplingRate by samplingStep) {
+      val vall: Array[Double] = answers.get(getSignature(filename, samplingRate, attrname, proportionWithin))
+      if (vall != null) {
+        if (desiredError > vall(aggr)) {
+          if(samplingRate>30)
+            return 30
+          return samplingRate
+        }
+      }
+    }
+    return 30
+  }
+
+  private def findMinSample(answers: util.HashMap[String, Array[Double]], filename: String, attrid: Int, desiredConfidence: Int, desiredError: Double, aggr: Int, useAttributeName: Boolean, header: Array[String]): Int = {
+    val proportionWithin: Int = desiredConfidence
+    for (samplingRate <- startSamplingRate to stopSamplingRate by samplingStep) {
+      val vall: Array[Double] = answers.get(getSignature(filename, samplingRate, attrid, proportionWithin, useAttributeName, header))
+      if (vall != null) {
+        if (desiredError > vall(aggr))
+          return samplingRate
+      }
+    }
+    return 100
   }
 }
 
