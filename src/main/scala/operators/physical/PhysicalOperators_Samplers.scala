@@ -19,17 +19,50 @@ import scala.util.Random
 import java.io.PrintWriter
 import java.util
 
+import definition.Paths._
+
+import scala.io.Source
 
 
 abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpression],child: SparkPlan) extends UnaryExecNode with CodegenSupport {
- // val parentDir = "/home/hamid/TASTER/"
-  val parentDir="/home/sdlhshah/spark-data/"
+  val parentDir = "/home/hamid/TASTER/"
+  //val parentDir = "/home/sdlhshah/spark-data/"
+  val pathToSynopsesFileName = parentDir + "SynopsesToFileName.txt"
   val pathToSaveSynopses = parentDir + "materializedSynopsis/"
   val pathToSaveSchema = parentDir + "materializedSchema/"
   val pathToCIStats = parentDir + "CIstats/"
+  val delimiterSynopsesColumnName = "#"
+  val delimiterSynopsisFileNameAtt = ";"
+  val delimiterParquetColumn = ","
+  var costOfExact = -1
+  def saveAsParquet(out: RDD[InternalRow], synopsis: String) = {
+    println("the next command is saving the sample")
+    val name = "sample" + Random.alphanumeric.filter(_.isLetter).take(20).mkString
+    out.map(x => {
+      var stringRow = ""
+      for (i <- 0 to x.numFields - 1) {
+        val value = x.get(i, output(i).dataType)
+        if (value == null) {
+          stringRow += delimiterParquetColumn
+        } else
+          stringRow += x.get(i, output(i).dataType) + delimiterParquetColumn
+      }
+      stringRow.dropRight(1)
+    }).saveAsTextFile(pathToSaveSynopses + name)
+    new PrintWriter(new FileOutputStream(new File(pathToSynopsesFileName), true)) {
+      write(name + "," + synopsis + "\n")
+      close
+    }
+    new PrintWriter(pathToSaveSchema + name) {
+      write(output.map(_.toAttribute.name).mkString(","));
+      close
+    }
+    println("I have stored the sample")
+  }
+
   val ans2 = new util.HashMap[String, Array[Double]]
-  var CIStatTable=""
-/*  val folder = (new File(pathToCIStats)).listFiles.filter(_.isFile)
+  var CIStatTable = ""
+  /*  val folder = (new File(pathToCIStats)).listFiles.filter(_.isFile)
   for (i <- 0 to folder.size - 1) {
     val br = new BufferedReader(new FileReader(folder(i).getAbsolutePath))
     if (output.map(_.toAttribute.name).mkString(",") == br.readLine) {
@@ -40,7 +73,10 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
         val v = vall.split(",")
         val vd = new Array[Double](v.length)
         for (i <- 0 until v.length) {
-          vd(i) = v(i).toDouble
+          vd(i) = v(i).toDouble    new PrintWriter(pathToSaveSchema + this.toString()) {
+      write(output.map(_.toAttribute.name).mkString(","));
+      close
+    }
         }
         ans2.put(key, vd)
       }
@@ -52,13 +88,13 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
   val samplingStep = 5
   var sampleSize: Long = 0
   var dataSize = 0
-  val aggr=0//if(func!=null && func.map(_.toString()).find(x=>(x.contains("count(")||x.contains("sum("))).isDefined) 1 else 0
- /* var fraction:Double = if (func!=null) {
+  val aggr = 0 //if(func!=null && func.map(_.toString()).find(x=>(x.contains("count(")||x.contains("sum("))).isDefined) 1 else 0
+  /* var fraction:Double = if (func!=null) {
     findMinSample(ans2,CIStatTable,func.map(_.aggregateFunction.toString()).take(1)(0),(confidence*100).toInt,error,aggr)
   } else {
     2
   }*/
-  var fraction=.1
+  var fraction = .20
   val fractionStep = 0.001
   val zValue = Array.fill[Double](100)(0.0)
   zValue(99) = 2.58
@@ -82,7 +118,8 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
     return 50
   }
 
-  override def toString(): String = super.toString()
+  override def toString(): String =
+    Seq("UnknownSample", child.output.map(_.name).mkString(delimiterSynopsesColumnName), 0, 0, fraction, "null").mkString(delimiterSynopsisFileNameAtt)
 
   override def output: Seq[Attribute] = child.output
 
@@ -196,88 +233,38 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
 
 case class UniformSampleExec2WithoutCI(seed:Long,child:SparkPlan) extends SampleExec(0,0,null,child) {
   override protected def doExecute(): RDD[InternalRow] = {
-    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
-    for(i <- 0 to folder.size-1){
-
-      if(folder(i).getName==this.toString()) {
-
-          return SparkContext.getOrCreate().objectFile(pathToSaveSynopses+folder(i).getName)
-        }
-    }
-    val out= child.execute().sample(false,fraction,seed) /*.mapPartitionsWithIndexInternal { (index, iter) =>
+    val out = child.execute().sample(false, fraction, seed) /*.mapPartitionsWithIndexInternal { (index, iter) =>
         if(index<3)
           iter
         else
           Iterator()}*/
-    //this.sampleSize=out.count().toInt
-    println("the next command is saving the UniformSampleExec2WithoutCI sample")
-    out.map(x => {
-      var stringRow = ""
-      for (i <- 0 to x.numFields - 1) {
-        val value = x.get(i, output(i).dataType)
-        if (value == null) {
-          stringRow += ","
-        } else
-          stringRow += x.get(i, output(i).dataType) + ","
-      }
-      stringRow.dropRight(1)
-    }).saveAsTextFile(pathToSaveSynopses + this.toString())
-    new PrintWriter(pathToSaveSchema + this.toString()) {
-      write(output.map(_.toAttribute.name).mkString(",")); close
-    }
-    println("I have stored the UniformSampleExec2WithoutCI sample")
-
-    return out
+   // sampleSize = out.count()
+    saveAsParquet(out, toString())
+    out
   }
+
   override def toString(): String =
-    "Uniform_" +(child.output.map(_.name).slice(0,10).mkString("") +"_"+ 0 + "_" + 0 + "_"+ this.fraction + "_null").replace(".","")
+    Seq("UniformWithoutCI", child.output.map(_.name).mkString(delimiterSynopsesColumnName), 0, 0, fraction, sampleSize, "null")
+      .mkString(delimiterSynopsisFileNameAtt)
+
 }
 
 case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Double, error:Double,
                               seed: Long,
                               child: SparkPlan) extends SampleExec(confidence ,error,functions ,child ) {
   override def toString(): String =
-    "Uniform_"+(child.output.map(_.name).slice(0,10).mkString("") +"_"+ confidence + "_" + error + "_"+ this.fraction + "_" + functions.mkString("_")).replace("(","").replace(")","").replace(".","")
+    Seq("Uniform", child.output.map(_.name).mkString(delimiterSynopsesColumnName), confidence, error, fraction, sampleSize
+      , functions.mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
 
   var seenPartition = 0
 
   protected override def doExecute(): RDD[InternalRow] = {
-    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
-    for(i <- 0 to folder.size-1){
-      val sampleInfo=folder(i).getName.split(";")
-      val sampleType=sampleInfo(0)
-      val confidence=sampleInfo(1).toDouble
-      val error=sampleInfo(2).toDouble
-      val sampleSize=sampleInfo(4).toInt
-      val fraction=sampleInfo(5).toDouble
-      if(sampleType=="Uniform")
-        if(confidence>=this.confidence&&error<=this.error){
-          this.sampleSize=sampleSize
-          this.fraction=fraction
-          return SparkContext.getOrCreate().objectFile(pathToSaveSynopses+folder(i).getName)
-        }
-    }
     var out: RDD[InternalRow] = null
     val input = child.execute()
     while (true) {
       out = input.sample(false, fraction)
-      println("the next command is saving the UniformSampleExec2 sample")
-      out.map(x => {
-        var stringRow = ""
-        for (i <- 0 to x.numFields - 1) {
-          val value = x.get(i, output(i).dataType)
-          if (value == null) {
-            stringRow += ","
-          } else
-            stringRow += x.get(i, output(i).dataType) + ","
-        }
-        stringRow.dropRight(1)
-      }).saveAsTextFile(pathToSaveSynopses + this.toString())
-      new PrintWriter(pathToSaveSchema + this.toString()) {
-        write(output.map(_.toAttribute.name).mkString(",")); close
-      }
-      println("I have stored the UniformSampleExec2 sample")
-
+   //   sampleSize = out.count()
+      saveAsParquet(out, toString())
       return out
       /*.mapPartitionsWithIndexInternal { (index, iter) =>
         if(index<3)
@@ -286,7 +273,7 @@ case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Dou
           Iterator()}*/
       //todo multiple operator on sample
       //todo without Cast
-      var sampleErrorForTargetConfidence = 0.0
+      /*      var sampleErrorForTargetConfidence = 0.0
       var targetError = 0.0
       val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
       this.sampleSize = sampleSize.toInt
@@ -317,15 +304,17 @@ case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Dou
       else
         throw new Exception("Operator is not approximatable")
       if (sampleErrorForTargetConfidence < targetError) {
-        out.saveAsObjectFile(pathToSaveSynopses+this.toString())
+        out.saveAsObjectFile(pathToSaveSynopses + this.toString())
         return out
       }
 
       //seenPartition += 1
-      fraction += fractionStep
+      fraction += fractionStep*/
     }
     out
   }
+
+
 }
 
 case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Double,error:Double,seed: Long,
@@ -349,13 +338,14 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
   })
 
   override def toString(): String =
-    "Distinct_" + (child.output.map(_.name).slice(0, 15).mkString("") + "_" + confidence + "_" + error + "_" + fraction + "_" + functions.mkString(".") + "_" + groupingExpression.mkString("_")).replace("(", "").replace(")", "").replace("#", "").replace(".", "")
+    Seq("Distinct", child.output.map(_.name).mkString(delimiterSynopsesColumnName), confidence, error, fraction, sampleSize
+      , functions.mkString(delimiterSynopsesColumnName), groupingExpression.map(_.name.split("#")(0)).mkString(delimiterSynopsesColumnName))
+      .mkString(delimiterSynopsisFileNameAtt)
 
   protected override def doExecute(): RDD[InternalRow] = {
     var out: RDD[InternalRow] = null
     val input = child.execute()
     //todo null are counted
-    dataSize = input.count().toInt
     while (true) {
       out = input.mapPartitionsWithIndex { (index, iter) => {
         val sketch: mutable.HashMap[String, Int] = new mutable.HashMap[String, Int]()
@@ -389,27 +379,10 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
         }
       }
       }
-
-
-      println("the next command is saving the distinct sample")
-      out.map(x => {
-        var stringRow = ""
-        for (i <- 0 to x.numFields - 1) {
-          val value = x.get(i, output(i).dataType)
-          if (value == null) {
-            stringRow += ","
-          } else
-            stringRow += x.get(i, output(i).dataType) + ","
-        }
-        stringRow.dropRight(1)
-      }).saveAsTextFile(pathToSaveSynopses + this.toString())
-      new PrintWriter(pathToSaveSchema + this.toString()) {
-        write(output.map(_.toAttribute.name).mkString(",")); close
-      }
-      println("I have stored the distinct sample")
-
+    //  sampleSize = out.count()
+      saveAsParquet(out, toString())
       return out
-      val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
+      /*      val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
       var sampleErrorForTargetConfidence = 0.0
       var targetError = 0.0
       this.sampleSize = out.count()
@@ -446,16 +419,16 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
         out.saveAsObjectFile(pathToSaveSynopses + this.toString())
         return out
       }
-      fraction += fractionStep
+      fraction += fractionStep*/
     }
     out
   }
 }
 
-case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:Double, error:Double, seed: Long,
-                                joinKey:Seq[AttributeReference],
-                                child: SparkPlan) extends SampleExec(confidence  ,error,functions,child: SparkPlan) {
-  fraction=0.1
+case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:Double, error:Double, seed: Long
+                                ,joinKey:Seq[AttributeReference],child: SparkPlan) extends SampleExec(confidence
+  ,error,functions,child: SparkPlan) {
+  fraction = 0.1
   val rand = new Random(seed)
   val a = math.abs(rand.nextInt())
   val b = math.abs(rand.nextInt())
@@ -472,8 +445,10 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
 
   override def toString(): String = {
     if (functions == null)
-      return "Universal_" + (child.output.map(_.name).slice(0, 15).mkString("") + "_" + confidence + "_" + error + "_" + fraction + "_" + "null" + "_" + joinKey.mkString("_")).replace("(", "").replace(")", "").replace("#", "").replace(".", "")
-    "Universal_" + (child.output.map(_.name).slice(0, 15).mkString("") + "_" + confidence + "_" + error + "_" + fraction + "_" + functions.mkString("_") + "_" + joinKey.mkString("_")).replace("(", "").replace(")", "").replace("#", "").replace(".", "")
+      return Seq("Universal", child.output.map(_.name).mkString(delimiterSynopsesColumnName), confidence, error, fraction
+        , sampleSize, "null", joinKey.map(_.name.split("#")(0)).mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
+    Seq("Universal", child.output.map(_.name).mkString(delimiterSynopsesColumnName), confidence, error, fraction
+      , functions.mkString(delimiterSynopsesColumnName), joinKey.map(_.name.split("#")(0)).mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
   }
 
   override protected def doExecute(): RDD[InternalRow] = {
@@ -511,28 +486,12 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
             List()
         }
       }
-      println("the next command is saving universal the sample")
-      out.map(x => {
-        var stringRow = ""
-        for (i <- 0 to x.numFields - 1) {
-          val value = x.get(i, output(i).dataType)
-          if (value == null) {
-            stringRow += ","
-          } else
-            stringRow += x.get(i, output(i).dataType) + ","
-        }
-        stringRow.dropRight(1)
-      }).saveAsTextFile(pathToSaveSynopses + this.toString())
-      new PrintWriter(pathToSaveSchema + this.toString()) {
-        write(output.map(_.toAttribute.name).mkString(","));
-        close
-      }
-      println("I have stored the universal sample")
-
+    //  sampleSize = out.count()
+      saveAsParquet(out, toString())
       return out
 
 
-      val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
+      /*      val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
       var targetError = 0.0
       var sampleErrorForTargetConfidence = 0.0
       this.sampleSize = sampleSize.toInt
@@ -567,8 +526,33 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
 
         return out
       }
-      //  fraction += fractionStep
+      //  fraction += fractionStep*/
     }
     out
   }
 }
+/*
+*     val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
+    for (i <- 0 to folder.size - 1) {
+      val sampleInfo = folder(i).getName.split(";")
+      val sampleType = sampleInfo(0)
+      val confidence = sampleInfo(1).toDouble
+      val error = sampleInfo(2).toDouble
+      val sampleSize = sampleInfo(4).toInt
+      val fraction = sampleInfo(5).toDouble
+      if (sampleType == "Uniform")
+        if (confidence >= this.confidence && error <= this.error) {
+          this.sampleSize = sampleSize
+          this.fraction = fraction
+          return SparkContext.getOrCreate().objectFile(pathToSaveSynopses + folder(i).getName)
+        }
+    }
+    *     val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
+    for (i <- 0 to folder.size - 1) {
+
+      if (folder(i).getName == this.toString()) {
+
+        return SparkContext.getOrCreate().objectFile(pathToSaveSynopses + folder(i).getName)
+      }
+    }
+    * */

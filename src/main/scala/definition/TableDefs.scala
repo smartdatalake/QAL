@@ -979,7 +979,7 @@ object TableDefs {
     sparkSession.sqlContext.createDataFrame(SCV.rdd, SCV.schema).createOrReplaceTempView("SCV");
     val PFV = sparkSession.read.parquet(DATA_DIR + "PFV.parquet");
     sparkSession.sqlContext.createDataFrame(PFV.rdd, PFV.schema).createOrReplaceTempView("PFV");
-    val BRS = sparkSession.read.parquet(DATA_DIR + "BRS10K.parquet");
+    val BRS = sparkSession.read.parquet(DATA_DIR + "BRS.parquet");
     sparkSession.sqlContext.createDataFrame(BRS.rdd, BRS.schema).createOrReplaceTempView("BRS");
     //val XXX = sparkSession.read.parquet(DATA_DIR + "XXX.parquet");
     //sparkSession.sqlContext.createDataFrame(XXX.rdd, XXX.schema).createOrReplaceTempView("XXX");

@@ -9,10 +9,14 @@ import scala.collection.Seq
 case class UniformSample(function:Seq[AggregateExpression],confidence:Double, interval:Double,
                          seed: Long, child: LogicalPlan)extends UnaryNode with Serializable {
   override def output: Seq[Attribute] = child.output
+  override def toString(): String = "UnifSample"+function.toString()+confidence+seed+output.toString()
+
 }
 
 case class UniformSampleWithoutCI(seed:Long,child:LogicalPlan)extends UnaryNode with Serializable {
   override def output: Seq[Attribute] = child.output
+  override def toString(): String = "UnifSampleWithoutCI"+output.toString()
+
 }
 
 case class Quantile(quantileCol:AttributeReference,quantilePart:Int,confidence:Double,error:Double
@@ -35,6 +39,8 @@ case class Binning (binningCol:AttributeReference,binningPart:Int,binningStart:D
 case class DistinctSample(functions:Seq[AggregateExpression],confidence:Double,error:Double,seed: Long,
                           groupingExpression:Seq[NamedExpression],
                           child: LogicalPlan)extends UnaryNode with Serializable {
+  override def toString(): String = "DistinctSample"+functions.toString()+confidence+error+seed+groupingExpression.toString()+output.toString()
+
   override def output: Seq[Attribute] = child.output
 }
 
@@ -42,4 +48,13 @@ case class UniversalSample(functions:Seq[AggregateExpression],confidence:Double,
                            joinKeys:Seq[AttributeReference],
                            child: LogicalPlan)extends UnaryNode with Serializable {
   override def output: Seq[Attribute] = child.output
+
+  override def toString(): String = "UnivSample"+functions.toString()+confidence+error+seed+joinKeys.toString()+output.toString()
+}
+
+case class UniversalSampleWithoutKey(functions:Seq[AggregateExpression],confidence:Double,error:Double,seed: Long,
+                           child: LogicalPlan)extends UnaryNode with Serializable {
+  override def output: Seq[Attribute] = child.output
+  override def toString(): String = "UnivSample"+functions.toString()+confidence+error+seed+"null"+output.toString()
+
 }
