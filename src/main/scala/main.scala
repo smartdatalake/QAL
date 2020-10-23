@@ -25,7 +25,7 @@ import org.apache.spark.sql.execution.joins.SortMergeJoinExec
 import org.apache.spark.sql.types.BooleanType
 
 import scala.reflect.io.Directory
-
+import definition.Paths._
 object main {
   def collectPlaceholders(plan: SparkPlan): Seq[(SparkPlan, LogicalPlan)] = {
     plan.collect {
@@ -102,21 +102,6 @@ object main {
     .getOrCreate();
 
 
-  val parentDir = "/home/hamid/TASTER/"
-  // val parentDir="/home/sdlhshah/spark-data/"
-  val windowSize = 5
-  val pathToSaveSynopses = parentDir + "materializedSynopsis/"
-  val pathToSaveSchema = parentDir + "materializedSchema/"
-  val pathToSynopsesFileName = parentDir + "SynopsesToFileName.txt"
-  val pathToCIStats = parentDir + "CIstats/"
-  val pathToTableSize = parentDir + "tableSize.txt"
-  val delimiterSynopsesColumnName = "#"
-  val delimiterSynopsisFileNameAtt = ";"
-  val delimiterParquetColumn = ","
-  val startSamplingRate = 5
-  val stopSamplingRate = 50
-  val samplingStep = 5
-  val maxSpace = 100000000
 
   def preparations: Seq[Rule[SparkPlan]] = Seq(
     PlanSubqueries(sparkSession),
@@ -129,9 +114,9 @@ object main {
 
 
   var mapRDDScanSize: mutable.HashMap[RDDScanExec, Long] = new mutable.HashMap[RDDScanExec, Long]()
-
+import definition.Paths
   def main(args: Array[String]): Unit = {
-
+println(definition.Paths.pathToSaveSchema)
     SparkSession.setActiveSession(sparkSession)
 
     System.setProperty("geospark.global.charset", "utf8")
@@ -139,7 +124,6 @@ object main {
     sparkSession.conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
     sparkSession.conf.set("spark.driver.maxResultSize", "8g")
     sparkSession.conf.set("spark.sql.codegen.wholeStage", false); // disable codegen
-    val seed = 5427500315423L
     val (bench, format, run, plan, option, repeats, currendDir, parentDir, benchDir, dataDir) = analyzeArgs(args);
     val queries = queryWorkload(bench, benchDir)
     loadTables(sparkSession, bench, dataDir)
@@ -180,7 +164,7 @@ object main {
       updateSynopsesView(sparkSession)
       //   sparkSession.sql("select count(1),revenue from samplefRCcnsWqQAJiDmwhHEoS group by revenue").show(10000)
 
-      var (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
+      val (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
       , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
       sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed), new pushFilterUp);
       sparkSession.experimental.extraStrategies = extraStr;
@@ -252,9 +236,11 @@ object main {
           }
           rowString.dropRight(1) + "}"
         }).mkString(",\n") + "]"
+        println(outString.substring(0,10))
+        convertSampleTextToParquet(sparkSession)
+        updateSynopsesView(sparkSession)
         updateWarehouse(queries.slice(i, i + windowSize))
       }
-      println(outString)
       println("Execution time: " + (System.nanoTime() - time) / 100000000)
       /*    val responseDocument = (outString).getBytes("UTF-8")
         val responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
@@ -277,11 +263,19 @@ object main {
 
   def updateWarehouse(future: Seq[String]): Unit = {
     // future approximate physical plans
-    val rawPlansPerQuery = future.map(enumerateRawPlanWithJoin(_))
+    val rawPlansPerQuery = future.map(query=>{
+      val (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
+      , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
+      sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed), new pushFilterUp);
+      enumerateRawPlanWithJoin(query_code)
+    })
     val logicalPlansPerQuery = rawPlansPerQuery.map(x => x.map(sparkSession.sessionState.optimizer.execute(_)))
     val physicalPlansPerQuery = logicalPlansPerQuery.map(x => x.flatMap(y => sparkSession.sessionState.planner.plan(ReturnAnswer(y))))
     //  val costOfPhysicalPlan=physicalPlans.map(x=>(x,costOfPlan(x,Seq()))).sortBy(_._2._2)
-
+ //   physicalPlansPerQuery.foreach(x=>{
+ //     println("____________________________________________")
+ //     println(x)
+  //  })
     // current synopses and their size
     val source = Source.fromFile(pathToSynopsesFileName)
     val ParquetNameToSynopses = mutable.HashMap[String, Array[String]]()
@@ -291,14 +285,20 @@ object main {
       SynopsesToParquetName.put(line.split(",")(1).split(delimiterSynopsisFileNameAtt), line.split(",")(0))
     }
     val foldersOfParquetTable = new File(pathToSaveSynopses).listFiles.filter(_.isDirectory)
-    var warehouseSynopsesToSize = mutable.HashMap[Array[String], Long]()
+    val warehouseSynopsesToSize = mutable.HashMap[Array[String], Long]()
     foldersOfParquetTable.foreach(x => warehouseSynopsesToSize.put(ParquetNameToSynopses(x.getName.split("\\.")(0)), folderSize(x)))
     if (warehouseSynopsesToSize.reduce((a, b) => (null, a._2 + b._2))._2 <= maxSpace)
       return Unit
     val candidateSynopses = new ListBuffer[(Array[String], Long)]()
     var candidateSynopsesSize: Long = 0
     var bestSynopsis = warehouseSynopsesToSize.map(x => (x, physicalPlansPerQuery.map(physicalPlans =>
-      physicalPlans.map(physicalPlan => costOfPlan(physicalPlan, Seq())._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2).reduce((A1, A2) => if (A1 < A2) A1 else A2)
+      physicalPlans.map(physicalPlan => {
+        if(costOfPlan(physicalPlan, Seq())._2 < costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2)
+          println("as")
+
+        println(costOfPlan(physicalPlan, Seq())._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2)
+        val p= costOfPlan(physicalPlan, Seq())._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2
+      p}).reduce((A1, A2) => if (A1 < A2) A1 else A2)
     ).reduce(_ + _))).map(x => (x._1._1, x._2)).reduce((A1, A2) => if (A1._2 < A2._2) A1 else A2)
     // create a list of synopses for keeping, gradually
     var bestSynopsisSize=warehouseSynopsesToSize.getOrElse(bestSynopsis._1, 0.toLong)
@@ -316,7 +316,7 @@ object main {
       (Directory(new File(pathToSaveSchema + SynopsesToParquetName.getOrElse(x._1, "null")))).deleteRecursively()
       SynopsesToParquetName.remove(x._1)
     })
-    new PrintWriter(new FileOutputStream(new File(pathToSynopsesFileName), true)) {
+    new PrintWriter(new FileOutputStream(new File(pathToSynopsesFileName), false)) {
       write(SynopsesToParquetName.map(x => x._2 + "," + x._1.mkString(delimiterSynopsisFileNameAtt)).toList.mkString("\n"))
       close
     }
@@ -488,8 +488,8 @@ object main {
     val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for (i <- 0 to folder.size - 1) {
       try {
-        if (folder(i).getName.contains("sample") && !folder(i).getName.contains("_parquet")
-          && !folder.find(_.getName == folder(i).getName + "_parquet").isDefined) {
+        if (folder(i).getName.contains("sample") && !folder(i).getName.contains(".parquet")
+          && !folder.find(_.getName == folder(i).getName + ".parquet").isDefined) {
           val f = new File(pathToSaveSynopses + folder(i).getName)
           val filenames = f.listFiles(new FilenameFilter() {
             override def accept(dir: File, name: String): Boolean = name.startsWith("part-")
@@ -507,11 +507,14 @@ object main {
               else theUnion = theUnion.union(d)
             }
           }
-          theUnion.toDF(header: _*).write.format("parquet").save(pathToSaveSynopses + folder(i).getName + "_parquet");
+          theUnion.toDF(header: _*).write.format("parquet").save(pathToSaveSynopses + folder(i).getName + ".parquet");
+          val directory = new Directory(new File(folder(i).getAbsolutePath))
+          directory.deleteRecursively()
         }
+
       }
       catch {
-        case _ =>
+        case e:Exception =>
           val directory = new Directory(new File(folder(i).getAbsolutePath))
           directory.deleteRecursively()
       }
@@ -533,17 +536,7 @@ object main {
     }
   }
 
-  val costOfFilter: Long = 1
-  val costOfProject: Long = 1
-  val costOfScan: Long = 1
-  val costOfJoin: Long = 1
-  val filterRatio: Double = 0.9
-  val costOfUniformSample: Long = 1
-  val costOfUniformWithoutCISample: Long = 1
-  val costOfUniversalSample: Long = 1
-  val costOfDistinctSample: Long = 1
-  val costOfScale: Long = 1
-  val HashAggregate: Long = 1
+
 
   def costOfPlan(pp: SparkPlan, synopsesCost: Seq[(Array[String], Long)]): (Long, Long) = pp match {
     case FilterExec(filters, child) =>
@@ -633,9 +626,9 @@ object main {
     val existingView = sparkSession.sqlContext.tableNames()
     val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for (i <- 0 to folder.size - 1) {
-      if (folder(i).getName.contains("_parquet") && !existingView.contains(folder(i).getName)) {
+      if (folder(i).getName.contains(".parquet") && !existingView.contains(folder(i).getName)) {
         val view = sparkSession.read.parquet(pathToSaveSynopses + folder(i).getName);
-        sparkSession.sqlContext.createDataFrame(view.rdd, view.schema).createOrReplaceTempView(folder(i).getName.split("_")(0));
+        sparkSession.sqlContext.createDataFrame(view.rdd, view.schema).createOrReplaceTempView(folder(i).getName.split("\\.")(0));
       }
     }
   }
@@ -646,7 +639,7 @@ object main {
       if (file.isFile) length += file.length
       else length += folderSize(file)
     }
-    length
+    length/100000
   }
 
 
@@ -871,7 +864,7 @@ object main {
     foldersOfParquetTable.filter(x => tables.contains(x.getName.split("\\.")(0).toLowerCase)).map(x => {
       val lRDD = sparkSession.sessionState.catalog.lookupRelation(org.apache.spark.sql.catalyst.TableIdentifier
       (x.getName.split("\\.")(0), None)).children(0).asInstanceOf[LogicalRDD]
-      (RDDScanExec(lRDD.output, lRDD.rdd, "ExistingRDD", lRDD.outputPartitioning, lRDD.outputOrdering), folderSize(x) / 1000)
+      (RDDScanExec(lRDD.output, lRDD.rdd, "ExistingRDD", lRDD.outputPartitioning, lRDD.outputOrdering), folderSize(x))
     }).foreach(x => map.put(x._1, x._2))
     map
   }

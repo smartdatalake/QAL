@@ -25,18 +25,10 @@ import scala.io.Source
 
 
 abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpression],child: SparkPlan) extends UnaryExecNode with CodegenSupport {
-  val parentDir = "/home/hamid/TASTER/"
-  //val parentDir = "/home/sdlhshah/spark-data/"
-  val pathToSynopsesFileName = parentDir + "SynopsesToFileName.txt"
-  val pathToSaveSynopses = parentDir + "materializedSynopsis/"
-  val pathToSaveSchema = parentDir + "materializedSchema/"
-  val pathToCIStats = parentDir + "CIstats/"
-  val delimiterSynopsesColumnName = "#"
-  val delimiterSynopsisFileNameAtt = ";"
-  val delimiterParquetColumn = ","
-  var costOfExact = -1
+
   def saveAsParquet(out: RDD[InternalRow], synopsis: String) = {
     println("the next command is saving the sample")
+    Random.setSeed(System.nanoTime())
     val name = "sample" + Random.alphanumeric.filter(_.isLetter).take(20).mkString
     out.map(x => {
       var stringRow = ""

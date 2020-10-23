@@ -1,4 +1,5 @@
 package rules.physical
+import definition.Paths._
 import operators.logical.{ApproximateAggregate, ApproximateUniversalJoin, DistinctSample, Quantile, UniformSample, UniformSampleWithoutCI, UniversalSample, UniversalSampleWithoutKey}
 import operators.physical.{DistinctSampleExec2, QuantileSampleExec, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
@@ -19,16 +20,7 @@ class p(){
   }
 }
 class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.HashMap[LogicalRDD,Long]) extends Strategy {
-  val parentDir = "/home/hamid/TASTER/"
-  //val parentDir = "/home/sdlhshah/spark-data/"
-  val pathToSynopsesFileName = parentDir + "SynopsesToFileName.txt"
-val costOfFilter:Long=1
-  val costOfProject:Long=1
-  val costOfScan:Long=1
-  val costOfJoin:Long=1
-  val delimiterSynopsesColumnName = "#"
-  val delimiterSynopsisFileNameAtt = ";"
-  val delimiterParquetColumn = ","
+
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
     /* case Quantile(quantileCol,quantilePart,confidence,error,seed,child)=>
       null
