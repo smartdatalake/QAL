@@ -3,13 +3,14 @@ import java.net.ServerSocket
 
 import definition.TableDefs
 import extraSQLOperators.extraSQLOperators
-import org.apache.spark.sql.catalyst.AliasIdentifier
+import org.apache.spark.sql.catalyst.{AliasIdentifier, InternalRow}
 import org.apache.spark.sql.{DataFrame, SparkSession, Strategy}
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, Join, LogicalPlan, Project, ReturnAnswer, Sort, SubqueryAlias}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.{CollapseCodegenStages, FilterExec, LogicalRDD, PlanLater, PlanSubqueries, ProjectExec, RDDScanExec, ReuseSubquery, SparkPlan}
 import rules.logical.{ApproximateInjector, pushFilterUp}
 import rules.physical.{ChangeSampleToScan, SampleTransformation, ScaleAggregateSampleExec}
+import org.apache.spark.sql.catalyst.analysis._
 
 import scala.collection.{Seq, mutable}
 import scala.collection.mutable.ListBuffer
@@ -19,14 +20,19 @@ import java.util
 import operators.physical.{DistinctSampleExec2, SampleExec, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.JoinType
-import org.apache.spark.sql.execution.aggregate.HashAggregateExec
+import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.exchange.{EnsureRequirements, ReuseExchange}
 import org.apache.spark.sql.execution.joins.SortMergeJoinExec
 import org.apache.spark.sql.types.BooleanType
 
 import scala.reflect.io.Directory
 import definition.Paths._
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 object main {
+
+  val tableCounter = new mutable.HashMap[String, Int]()
+
   def collectPlaceholders(plan: SparkPlan): Seq[(SparkPlan, LogicalPlan)] = {
     plan.collect {
       case placeholder@PlanLater(logicalPlan) => placeholder -> logicalPlan
@@ -102,7 +108,6 @@ object main {
     .getOrCreate();
 
 
-
   def preparations: Seq[Rule[SparkPlan]] = Seq(
     PlanSubqueries(sparkSession),
     EnsureRequirements(sparkSession.sessionState.conf),
@@ -112,13 +117,24 @@ object main {
     ChangeSampleToScan(sparkSession, pathToSynopsesFileName, delimiterSynopsisFileNameAtt, delimiterSynopsesColumnName)
   )
 
+  def updateAttributeName(lp: LogicalPlan, tableFrequency: mutable.HashMap[String, Int]): Unit = lp match {
+    case SubqueryAlias(identifier, child@LogicalRDD(output, rdd, outputPartitioning, outputOrdering, isStreaming)) =>
+      val att = output.toList
+      tableFrequency.put(identifier.identifier, tableFrequency.getOrElse(identifier.identifier, 0) + 1)
+      for (i <- 0 to output.size - 1)
+        tableName.put(att(i).toAttribute.toString().toLowerCase, identifier.identifier + "_" + tableFrequency.get(identifier.identifier).get)
+    case a =>
+      a.children.foreach(x => updateAttributeName(x, tableFrequency))
+  }
 
-  var mapRDDScanSize: mutable.HashMap[RDDScanExec, Long] = new mutable.HashMap[RDDScanExec, Long]()
-import definition.Paths
+  var mapRDDScanSize: mutable.HashMap[String, Long] = new mutable.HashMap[String, Long]()
+
+  import definition.Paths
+
   def main(args: Array[String]): Unit = {
-println(definition.Paths.pathToSaveSchema)
+    println(definition.Paths.pathToSaveSchema)
     SparkSession.setActiveSession(sparkSession)
-
+    var counter = 0
     System.setProperty("geospark.global.charset", "utf8")
     sparkSession.sparkContext.setLogLevel("ERROR");
     sparkSession.conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
@@ -127,10 +143,12 @@ println(definition.Paths.pathToSaveSchema)
     val (bench, format, run, plan, option, repeats, currendDir, parentDir, benchDir, dataDir) = analyzeArgs(args);
     val queries = queryWorkload(bench, benchDir)
     loadTables(sparkSession, bench, dataDir)
+    //sparkSession.sqlContext.sql("select count(*) from specobjall as s, specphotoall as ph, sppparams as spp where s.specobjid=spp.specobjid and spp.specobjid= ph.specobjid and s.class='star' and s.subclass like 'b%' and spp.snr>=31 and spp.snr<=35 ").show(1000)
+    //sparkSession.sqlContext.sql("select * from platex f, platex ff where f.plateID=ff.plateID ").show(1000)
+    // println(sparkSession.sqlContext.sql("SELECT first.plate, other.plate, COUNT(DISTINCT other.mjd) + COUNT(DISTINCT first.mjd) AS nightsObserved, otherPlate.programname, count(DISTINCT other.bestObjID) AS objects FROM SpecObjAll first JOIN SpecObjAll other ON first.bestObjID = other.bestObjID JOIN PlateX AS firstPlate ON firstPlate.plate = first.plate JOIN PlateX AS otherPlate ON otherPlate.plate = other.plate WHERE first.scienceprimary = 1 AND other.scienceprimary = 0 AND other.bestObjID > 0 GROUP BY first.plate, other.plate, otherPlate.programname ORDER BY nightsObserved DESC, otherPlate.programname, first.plate, other.plate ").queryExecution.logical)
     mapRDDScanSize = readRDDScanSize(dataDir, pathToSaveSynopses)
     val (extraOpt, extraStr) = setRules(option)
     /*sparkSession.sqlContext.sql("select count(numberOfEmployees),numberOfEmployees from SCV s group by numberOfEmployees").show(1000)
-    sparkSession.sqlContext.sql("select count(*) from SCV s, PFV p where s.acheneID==p.company_acheneID and numberOfEmployees>0 ").show(1000)
     sparkSession.sqlContext.sql("select count(*) from SCV s, PFV p where s.acheneID==p.company_acheneID and numberOfEmployees>1 ").show(1000)
     sparkSession.sqlContext.sql("select count(*) from SCV s, PFV p where s.acheneID==p.company_acheneID and numberOfEmployees>2 ").show(1000)
     sparkSession.sqlContext.sql("select count(*) from SCV s, PFV p where s.acheneID==p.company_acheneID and numberOfEmployees>3 ").show(1000)
@@ -168,7 +186,8 @@ println(definition.Paths.pathToSaveSchema)
       , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
       sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed), new pushFilterUp);
       sparkSession.experimental.extraStrategies = extraStr;
-      //val p=sparkSession.sqlContext.sql("select count(s.legalStatus),s.legalStatus from PFV p, SCV s where p.company_acheneID=s.acheneID  group by s.legalStatus").queryExecution.executedPlan
+      // sparkSession.sqlContext.sql("SELECT  * from First").show(10)
+      // sparkSession.sqlContext.sql("SELECT   fld.run, fld.avg_sky_muJy, fld.runarea AS area, fp.nfirstmatch FROM ( SELECT run, sum(primaryArea) AS runarea, 3631e6*avg(power(cast(10. as float),-0.4*sky_r)) as avg_sky_muJy FROM field GROUP BY run ) AS fld LEFT OUTER JOIN ( SELECT p.run, count(*) AS nfirstmatch FROM first AS fm INNER JOIN photoprimary as p ON p.objid=fm.objid GROUP BY p.run ) AS fp ON fld.run=fp.run ORDER BY fld.run").show(100000)
 
       println("Query:")
       println(query_code)
@@ -180,23 +199,31 @@ println(definition.Paths.pathToSaveSchema)
       else if (dataProfileTable != "")
         outString = extraSQLOperators.execDataProfile(sparkSession, dataProfileTable, confidence, error, seed)
       else if (plan) {
+        val subQueries = getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
+        //          println("aggExp:"+s.find(_.isInstanceOf[Aggregate]).map(_.asInstanceOf[Aggregate].aggregateExpressions.toString()).getOrElse("None")
+        //          +"\ngroupingExp"+s.find(_.isInstanceOf[Aggregate]).map(_.asInstanceOf[Aggregate].groupingExpressions.toString()).getOrElse("None")
+        //            +"\nfilterExp"+s.find(_.isInstanceOf[Filter]).map(_.asInstanceOf[Filter].condition.toString()).getOrElse("None")
+        //            +"\ntable"+s.find(x=>x.isInstanceOf[SubqueryAlias]&&x.children(0).isInstanceOf[LogicalRDD]).map(_.asInstanceOf[SubqueryAlias].name.identifier).toList.mkString(","))
         //  val l=sparkSession.sessionState.catalog.lookupRelation(new  org.apache.spark.sql.catalyst.TableIdentifier("SCV",None))
         // val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
         // recursiveProcess(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed, logicalPlanToTable)
         //   sparkSession.sqlContext.sql(query_code).queryExecution.logical
         //   val sampleParquetToTable: mutable.HashMap[String, String] = new mutable.HashMap()
         //   val sampleRate: mutable.HashSet[Double] = new mutable.HashSet[Double]()
-        val rawPlans = enumerateRawPlanWithJoin(query_code)
-        val logicalPlans = rawPlans.map(x => sparkSession.sessionState.optimizer.execute(x))
-        val physicalPlans = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
-        val costOfPhysicalPlan = physicalPlans.map(x => (x, costOfPlan(x, Seq()))).sortBy(_._2._2)
-        costOfPhysicalPlan.foreach(println)
-        println("cheapest plan before execution preparation:")
-        println(costOfPhysicalPlan(0)._1)
-        val cheapestPhysicalPlan = costOfPhysicalPlan(0)._1.map(prepareForExecution).toList(0)
-        println("cheapest plan:")
-        println(cheapestPhysicalPlan)
-        /*  setDistinctSampleCI(p, sampleRate)
+        for (subQuery <- subQueries) {
+          updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
+          println(subQuery)
+          val rawPlans = enumerateRawPlanWithJoin(subQuery)
+          val logicalPlans = rawPlans.map(x => sparkSession.sessionState.optimizer.execute(x))
+          val physicalPlans = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
+          val costOfPhysicalPlan = physicalPlans.map(x => (x, costOfPlan(x, Seq()))).sortBy(_._2._2)
+          // costOfPhysicalPlan.foreach(println)
+          println("cheapest plan before execution preparation:")
+          // println(costOfPhysicalPlan(0)._1)
+          val cheapestPhysicalPlan = costOfPhysicalPlan(0)._1.map(prepareForExecution).toList(0)
+          println("cheapest plan:")
+          //  println(cheapestPhysicalPlan)
+          /*  setDistinctSampleCI(p, sampleRate)
         getTableNameToSampleParquet(p, logicalPlanToTable, sampleParquetToTable)
         for (a <- sampleParquetToTable.toList) {
           if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase)) {
@@ -206,42 +233,60 @@ println(definition.Paths.pathToSaveSchema)
             p = sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan
           }
         }*/
-        val col = sparkSession.sqlContext.sql(query_code).columns
-        val minNumberOfOcc = 15
-        val partCNT = 15
-        val fraction = 1 / 1 // sampleRate.toList(0)
-
-        println(cheapestPhysicalPlan)
-        outString = "[" + cheapestPhysicalPlan.executeCollectPublic().map(row => {
-          var rowString = "{"
-          for (i <- 0 to col.size - 1) {
-            if (col(i).contains('(') && col(i).split('(')(0).contains("count")) {
-              if (row.getLong(i) < partCNT * 2 * minNumberOfOcc) {
-                rowString += "\"" + col(i) + "\":" + row.getLong(i) + ","
+          val col = sparkSession.sqlContext.sql(query_code).columns
+          val minNumberOfOcc = 15
+          val partCNT = 15
+          val fraction = 1 / 1 // sampleRate.toList(0)
+          println(cheapestPhysicalPlan)
+          cheapestPhysicalPlan.executeCollectPublic().take(10).foreach(println) /*.map(row => {
+            var rowString = "{"
+            for (i <- 0 to col.size - 1) {
+              if (col(i).contains('(') && col(i).split('(')(0).contains("count")) {
+                if (row.getLong(i) < partCNT * 2 * minNumberOfOcc) {
+                  rowString += "\"" + col(i) + "\":" + row.getLong(i) + ","
+                } else {
+                  rowString += "\"" + col(i) + "\":" + (row.getLong(i) * fraction).toLong + ","
+                }
+              } else if (col(i).contains('(') && col(i).contains("sum")) {
+                if (row.getLong(i - 1) < partCNT * 2 * minNumberOfOcc) {
+                  rowString += "\"" + col(i) + "\":" + row.getDouble(i) + ","
+                } else {
+                  rowString += "\"" + col(i) + "\":" + (row.getDouble(i) * fraction) + ","
+                }
               } else {
-                rowString += "\"" + col(i) + "\":" + (row.getLong(i) * fraction).toLong + ","
+                if (row.get(i).isInstanceOf[String])
+                  rowString += "\"" + col(i) + "\":\"" + row.get(i) + "\","
+                else
+                  rowString += "\"" + col(i) + "\":" + row.get(i) + ","
               }
-            } else if (col(i).contains('(') && col(i).contains("sum")) {
-              if (row.getLong(i - 1) < partCNT * 2 * minNumberOfOcc) {
-                rowString += "\"" + col(i) + "\":" + row.getDouble(i) + ","
-              } else {
-                rowString += "\"" + col(i) + "\":" + (row.getDouble(i) * fraction) + ","
-              }
-            } else {
-              if (row.get(i).isInstanceOf[String])
-                rowString += "\"" + col(i) + "\":\"" + row.get(i) + "\","
-              else
-                rowString += "\"" + col(i) + "\":" + row.get(i) + ","
             }
-          }
-          rowString.dropRight(1) + "}"
-        }).mkString(",\n") + "]"
-        println(outString.substring(0,10))
-        convertSampleTextToParquet(sparkSession)
-        updateSynopsesView(sparkSession)
-        updateWarehouse(queries.slice(i, i + windowSize))
+            rowString.dropRight(1) + "}"
+          }).mkString(",\n") + "]"*/
+          //     println(outString.substring(0, 10))
+          convertSampleTextToParquet(sparkSession)
+          updateSynopsesView(sparkSession)
+          updateWarehouse(queries.slice(i, i + windowSize))
+          updateSynopsesView(sparkSession)
+        }
+        println("______________________________________________________________________________________________________")
       }
-      println("Execution time: " + (System.nanoTime() - time) / 100000000)
+      else if (true) {
+        if (counter % 100 == 0) {
+          println(counter)
+          tableCounter.toList.sortBy(_._2).reverse.take(100).foreach(println)
+        }
+        counter = counter + 1
+        try {
+          val subQueries = getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
+          subQueries.foreach(subQuery => countTable(subQuery))
+        }
+        catch {
+          case _ =>
+            println("______________________error_________________")
+            println(query_code)
+        }
+      }
+      //    println("Execution time: " + (System.nanoTime() - time) / 100000000)
       /*    val responseDocument = (outString).getBytes("UTF-8")
         val responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
         output.write(responseHeader)
@@ -259,30 +304,34 @@ println(definition.Paths.pathToSaveSchema)
           output.close()
       }*/
     }
+    tableCounter.toList.sortBy(_._2).take(100).foreach(println)
   }
 
   def updateWarehouse(future: Seq[String]): Unit = {
     // future approximate physical plans
-    val rawPlansPerQuery = future.map(query=>{
+    val rawPlansPerQuery = future.flatMap(query => {
       val (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
       , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
-      sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed), new pushFilterUp);
-      enumerateRawPlanWithJoin(query_code)
+      getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
+      //sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed), new pushFilterUp);
+      //enumerateRawPlanWithJoin(query_code)
     })
-    val logicalPlansPerQuery = rawPlansPerQuery.map(x => x.map(sparkSession.sessionState.optimizer.execute(_)))
+    rawPlansPerQuery.foreach(x=>updateAttributeName(x,new mutable.HashMap[String,Int]()))
+    val rawPlansPerQueryWithJoins= rawPlansPerQuery.map(enumerateRawPlanWithJoin)
+    val logicalPlansPerQuery = rawPlansPerQueryWithJoins.map(x => x.map(sparkSession.sessionState.optimizer.execute(_)))
     val physicalPlansPerQuery = logicalPlansPerQuery.map(x => x.flatMap(y => sparkSession.sessionState.planner.plan(ReturnAnswer(y))))
     //  val costOfPhysicalPlan=physicalPlans.map(x=>(x,costOfPlan(x,Seq()))).sortBy(_._2._2)
- //   physicalPlansPerQuery.foreach(x=>{
- //     println("____________________________________________")
- //     println(x)
-  //  })
+    //   physicalPlansPerQuery.foreach(x=>{
+    //     println("____________________________________________")
+    //     println(x)
+    //  })
     // current synopses and their size
     val source = Source.fromFile(pathToSynopsesFileName)
     val ParquetNameToSynopses = mutable.HashMap[String, Array[String]]()
     val SynopsesToParquetName = mutable.HashMap[Array[String], String]()
     for (line <- source.getLines()) {
-      ParquetNameToSynopses.put(line.split(",")(0), line.split(",")(1).split(delimiterSynopsisFileNameAtt))
-      SynopsesToParquetName.put(line.split(",")(1).split(delimiterSynopsisFileNameAtt), line.split(",")(0))
+      ParquetNameToSynopses.put(line.substring(0, 26), line.substring(27).split(delimiterSynopsisFileNameAtt))
+      SynopsesToParquetName.put(line.substring(27).split(delimiterSynopsisFileNameAtt), line.substring(0, 26))
     }
     val foldersOfParquetTable = new File(pathToSaveSynopses).listFiles.filter(_.isDirectory)
     val warehouseSynopsesToSize = mutable.HashMap[Array[String], Long]()
@@ -293,38 +342,54 @@ println(definition.Paths.pathToSaveSchema)
     var candidateSynopsesSize: Long = 0
     var bestSynopsis = warehouseSynopsesToSize.map(x => (x, physicalPlansPerQuery.map(physicalPlans =>
       physicalPlans.map(physicalPlan => {
-        if(costOfPlan(physicalPlan, Seq())._2 < costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2)
-          println("as")
+       // if (costOfPlan(physicalPlan, Seq())._2 < costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2)
+       //   println("as")
 
-        println(costOfPlan(physicalPlan, Seq())._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2)
-        val p= costOfPlan(physicalPlan, Seq())._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2
-      p}).reduce((A1, A2) => if (A1 < A2) A1 else A2)
+      //  println(costOfPlan(physicalPlan, Seq())._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2)
+        val p = costOfPlan(physicalPlan, Seq())._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2
+        p
+      }).reduce((A1, A2) => if (A1 < A2) A1 else A2)
     ).reduce(_ + _))).map(x => (x._1._1, x._2)).reduce((A1, A2) => if (A1._2 < A2._2) A1 else A2)
     // create a list of synopses for keeping, gradually
-    var bestSynopsisSize=warehouseSynopsesToSize.getOrElse(bestSynopsis._1, 0.toLong)
+    var bestSynopsisSize = warehouseSynopsesToSize.getOrElse(bestSynopsis._1, 0.toLong)
     while (candidateSynopsesSize + bestSynopsisSize < maxSpace) {
       candidateSynopsesSize += bestSynopsisSize
       warehouseSynopsesToSize.remove(bestSynopsis._1)
       bestSynopsis = warehouseSynopsesToSize.map(x => (x, physicalPlansPerQuery.map(physicalPlans =>
         physicalPlans.map(physicalPlan => costOfPlan(physicalPlan, Seq())._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(x))._2).reduce((A1, A2) => if (A1 < A2) A1 else A2)
       ).reduce(_ + _))).map(x => (x._1._1, x._2)).reduce((A1, A2) => if (A1._2 < A2._2) A1 else A2)
-      bestSynopsisSize=warehouseSynopsesToSize.getOrElse(bestSynopsis._1, 0.toLong)
+      bestSynopsisSize = warehouseSynopsesToSize.getOrElse(bestSynopsis._1, 0.toLong)
     }
     // remove the rest
     warehouseSynopsesToSize.foreach(x => {
+      println("removed:    "+ x._1.mkString(";"))
       (Directory(new File(pathToSaveSynopses + SynopsesToParquetName.getOrElse(x._1, "null")))).deleteRecursively()
       (Directory(new File(pathToSaveSchema + SynopsesToParquetName.getOrElse(x._1, "null")))).deleteRecursively()
       SynopsesToParquetName.remove(x._1)
     })
     new PrintWriter(new FileOutputStream(new File(pathToSynopsesFileName), false)) {
-      write(SynopsesToParquetName.map(x => x._2 + "," + x._1.mkString(delimiterSynopsisFileNameAtt)).toList.mkString("\n"))
+      write(SynopsesToParquetName.map(x => x._2 + "," + x._1.mkString(delimiterSynopsisFileNameAtt)).toList.mkString("\n")+"\n")
       close
     }
   }
 
-  def enumerateRawPlanWithJoin(queryCode: String): Seq[LogicalPlan] = {
+  def countTable(lp: LogicalPlan): Unit = lp match {
+    case node@org.apache.spark.sql.catalyst.analysis.UnresolvedRelation(table) =>
+      tableCounter.update(table.table, tableCounter.getOrElse(table.table, 0) + 1)
+    case t =>
+      t.children.foreach(child => countTable(child))
+  }
+
+  def getAggSubQueries(lp: LogicalPlan): Seq[LogicalPlan] = lp match {
+
+    case a@Aggregate(groupingExpressions, aggregateExpressions, child) =>
+      Seq(a) ++ getAggSubQueries(child)
+    case a =>
+      a.children.flatMap(child => getAggSubQueries(child))
+  }
+
+  def enumerateRawPlanWithJoin(rawPlan: LogicalPlan): Seq[LogicalPlan] = {
     var rootTemp: ListBuffer[LogicalPlan] = new ListBuffer[LogicalPlan]
-    val rawPlan = sparkSession.sqlContext.sql(queryCode).queryExecution.analyzed
     val subQueries = new ListBuffer[SubqueryAlias]()
     val queue = new mutable.Queue[LogicalPlan]()
     var joinConditions: ListBuffer[BinaryExpression] = new ListBuffer[BinaryExpression]()
@@ -334,9 +399,9 @@ println(definition.Paths.pathToSaveSchema)
       t match {
         case SubqueryAlias(name, child) =>
           subQueries.+=(t.asInstanceOf[SubqueryAlias])
-        case Aggregate(groupingExpressions, aggregateExpressions, child) =>
+        case a@Aggregate(groupingExpressions, aggregateExpressions, child) =>
           queue.enqueue(child)
-          rootTemp.+=(Aggregate(groupingExpressions, aggregateExpressions, rawPlan.children(0).children(0)))
+          rootTemp.+=(Aggregate(groupingExpressions, aggregateExpressions, child))
         case Filter(conditions, child) =>
           joinConditions.++=(getJoinConditions(conditions))
           queue.enqueue(child)
@@ -346,12 +411,17 @@ println(definition.Paths.pathToSaveSchema)
         condition: Option[Expression]) =>
           queue.enqueue(left)
           queue.enqueue(right)
+          if (condition.isDefined)
+            joinConditions.+=(condition.get.asInstanceOf[BinaryExpression])
         case Project(p, c) =>
           queue.enqueue(c)
           rootTemp.+=(Project(p, rawPlan.children(0).children(0)))
         case Sort(order: Seq[SortOrder], global: Boolean, child: LogicalPlan) =>
           queue.enqueue(child)
           rootTemp += Sort(order, global, rawPlan.children(0).children(0))
+        case u@UnresolvedRelation(table) =>
+          subQueries.+=(SubqueryAlias(AliasIdentifier(table.table), u))
+
         case _ =>
           throw new Exception("new logical raw node")
       }
@@ -367,12 +437,12 @@ println(definition.Paths.pathToSaveSchema)
             for (r <- l + 1 to allPossibleJoinOrders(j).size - 1)
               if (!hasTheSameSubquery(allPossibleJoinOrders(j)(l), allPossibleJoinOrders(j)(r))
                 && IsJoinable(allPossibleJoinOrders(j)(l), allPossibleJoinOrders(j)(r), joinConditions))
-                temp.+=:(Join(allPossibleJoinOrders(j)(l), allPossibleJoinOrders(j)(r), org.apache.spark.sql.catalyst.plans.Inner, None))
+                temp.+=:(Join(allPossibleJoinOrders(j)(l), allPossibleJoinOrders(j)(r), org.apache.spark.sql.catalyst.plans.Inner, Some(chooseConditionFor(allPossibleJoinOrders(j)(l), allPossibleJoinOrders(j)(r), joinConditions))))
         } else if (j < i - j) {
           for (left <- allPossibleJoinOrders(j))
             for (right <- allPossibleJoinOrders(i - j))
-              if (!hasTheSameSubquery(left, right)) {
-                val jj = (Join(left, right, org.apache.spark.sql.catalyst.plans.Inner, None))
+              if (!hasTheSameSubquery(left, right) && IsJoinable(left, right, joinConditions)) {
+                val jj = (Join(left, right, org.apache.spark.sql.catalyst.plans.Inner, Some(chooseConditionFor(left, right, joinConditions))))
                 //if(!isCartesianProduct(jj))
                 temp.+=:(jj)
               }
@@ -400,27 +470,38 @@ println(definition.Paths.pathToSaveSchema)
     plans
   }
 
+  def enumerateRawPlanWithJoin(queryCode: String): Seq[LogicalPlan] = enumerateRawPlanWithJoin(sparkSession.sqlContext.sql(queryCode).queryExecution.analyzed)
+
+  def chooseConditionFor(lp1: LogicalPlan, lp2: LogicalPlan, joinConditions: ListBuffer[BinaryExpression]): Expression = {
+    for (i <- 0 to joinConditions.length - 1) {
+      val lJoinkey = Set(joinConditions(i).left.find(_.isInstanceOf[AttributeReference]).get.toString().toLowerCase)
+      val rJoinkey = Set(joinConditions(i).right.find(_.isInstanceOf[AttributeReference]).get.toString().toLowerCase)
+      if ((lJoinkey.subsetOf(lp1.output.map(_.toAttribute.toString().toLowerCase).toSet) && rJoinkey.subsetOf(lp2.output.map(_.toAttribute.toString().toLowerCase).toSet))
+        || (lJoinkey.subsetOf(lp2.output.map(_.toAttribute.toString().toLowerCase).toSet) && rJoinkey.subsetOf(lp1.output.map(_.toAttribute.toString().toLowerCase).toSet)))
+        return joinConditions(i).asInstanceOf[Expression]
+    }
+    throw new Exception("Cannot find any condition to join the two tables")
+  }
+
   def getJoinConditions(exp: Expression): Seq[BinaryExpression] = exp match {
     case a@And(left, right) =>
-      getJoinConditions(left) ++ getJoinConditions(right)
+      return (getJoinConditions(left) ++ getJoinConditions(right))
     case o@Or(left, right) =>
-      getJoinConditions(left) ++ getJoinConditions(right)
+      return (getJoinConditions(left) ++ getJoinConditions(right))
     case b@BinaryOperator(left, right) =>
-      if (left.isInstanceOf[AttributeReference] && right.isInstanceOf[AttributeReference])
+      if (left.find(_.isInstanceOf[AttributeReference]).isDefined && right.find(_.isInstanceOf[AttributeReference]).isDefined)
         return Seq(b)
       Seq()
-    case _ =>
-      throw new Exception("I was identifying join condition and faced an unknown condition!")
+    case a =>
+      Seq()
   }
 
   def IsJoinable(lp1: LogicalPlan, lp2: LogicalPlan, joinConditions: ListBuffer[BinaryExpression]): Boolean = {
     for (i <- 0 to joinConditions.length - 1) {
-      val lJoinkey = Set(joinConditions(i).left.toString())
-      val rJoinkey = Set(joinConditions(i).right.toString())
-      val l = lp1.output.map(x => x.toAttribute.toString()).toList
-      println("")
-      if ((lJoinkey.subsetOf(lp1.output.map(_.toAttribute.toString()).toSet) && rJoinkey.subsetOf(lp2.output.map(_.toAttribute.toString()).toSet))
-        || (lJoinkey.subsetOf(lp2.output.map(_.toAttribute.toString()).toSet) && rJoinkey.subsetOf(lp1.output.map(_.toAttribute.toString()).toSet)))
+      val lJoinkey = Set(joinConditions(i).left.find(_.isInstanceOf[AttributeReference]).get.toString().toLowerCase)
+      val rJoinkey = Set(joinConditions(i).right.find(_.isInstanceOf[AttributeReference]).get.toString().toLowerCase)
+      if ((lJoinkey.subsetOf(lp1.output.map(_.toAttribute.toString().toLowerCase).toSet) && rJoinkey.subsetOf(lp2.output.map(_.toAttribute.toString().toLowerCase).toSet))
+        || (lJoinkey.subsetOf(lp2.output.map(_.toAttribute.toString().toLowerCase).toSet) && rJoinkey.subsetOf(lp1.output.map(_.toAttribute.toString().toLowerCase).toSet)))
         return true
     }
     false
@@ -514,7 +595,8 @@ println(definition.Paths.pathToSaveSchema)
 
       }
       catch {
-        case e:Exception =>
+        case e: Exception =>
+          println(e)
           val directory = new Directory(new File(folder(i).getAbsolutePath))
           directory.deleteRecursively()
       }
@@ -537,7 +619,6 @@ println(definition.Paths.pathToSaveSchema)
   }
 
 
-
   def costOfPlan(pp: SparkPlan, synopsesCost: Seq[(Array[String], Long)]): (Long, Long) = pp match {
     case FilterExec(filters, child) =>
       val (inputSize, childCost) = costOfPlan(child, synopsesCost)
@@ -552,7 +633,7 @@ println(definition.Paths.pathToSaveSchema)
       val outputSize = leftInputSize * rightInputSize
       (outputSize, costOfJoin * outputSize + leftChildCost + rightChildCost)
     case l@RDDScanExec(a, b, s, d, g) =>
-      val size: Long = mapRDDScanSize.getOrElse(l, -1)
+      val size: Long = mapRDDScanSize.getOrElse(definition.Paths.getTableColumnsName(l.output).mkString(";").toLowerCase, -1)
       if (size == -1)
         throw new Exception("The size does not exist: " + l.toString())
       (size, costOfScan * size)
@@ -582,6 +663,9 @@ println(definition.Paths.pathToSaveSchema)
     case h@HashAggregateExec(requiredChildDistributionExpressions, groupingExpressions, aggregateExpressions, aggregateAttributes, initialInputBufferOffset, resultExpressions, child) =>
       val (inputSize, childCost) = costOfPlan(child, synopsesCost)
       (inputSize, HashAggregate * inputSize + childCost)
+    case h@SortAggregateExec(requiredChildDistributionExpressions, groupingExpressions, aggregateExpressions, aggregateAttributes, initialInputBufferOffset, resultExpressions, child) =>
+      val (inputSize, childCost) = costOfPlan(child, synopsesCost)
+      (inputSize, SortAggregate * inputSize + childCost)
     case _ =>
       throw new Exception("No cost is defined for the node")
   }
@@ -639,7 +723,7 @@ println(definition.Paths.pathToSaveSchema)
       if (file.isFile) length += file.length
       else length += folderSize(file)
     }
-    length/100000
+    length / 100000
   }
 
 
@@ -713,9 +797,55 @@ println(definition.Paths.pathToSaveSchema)
       throw new Exception("!!!Invalid dataset!!!")
   }
 
+  def cleanSkyServerQuery(query: String): String = {
+    var token = query.split(" ")
+    for (i <- (0 to token.size - 1)) {
+      if (token(i).equals("as") && token(i + 1).contains("\'"))
+        token(i + 1) = token(i + 1).replace("\'", " ")
+      if (token(i).equalsIgnoreCase("top")) {
+        token(i) = ""
+        token(i + 1) = ""
+      }
+      if (token(i).contains("fgetNearByObjEq")) {
+        token(i) = "photoobj"
+      }
+      if (token(i).equalsIgnoreCase("into") && token(i + 1).contains("db")) {
+        token(i) = ""
+        token(i + 1) = ""
+      }
+    }
+    token.mkString(" ").replace("stdev(", "avg(").replace("stdev (", "avg (").replaceAll("mydb\\.ring_galaxies_z", "galaxy").replace("ring_galaxies_z", "galaxy")
+  }
+
   def queryWorkload(bench: String, BENCH_DIR: String): List[String] = {
     var temp: ListBuffer[String] = ListBuffer();
-    if (bench.equals("skyServer") || bench.equals("atoka") || bench.equals("test") || bench.equals("tpch")) {
+    if (bench.equals("skyServer")) {
+      val src = Source.fromFile(BENCH_DIR + "queryLog.csv").getLines
+      src.take(1).next
+      var counter = 0
+      for (l <- src) {
+        if (!l.contains("35\'") && !l.contains("cannonStar") && !l.contains("mydb") && !l.contains("MYDB") && !l.contains("datalength") && !l.contains("Countof") && !l.contains("speclineall") && !l.contains("SpecLineAll") && !l.contains("mangaDAPall") && !l.contains("mangadapall") && !l.contains("fPhotoFlags") && !l.contains("fGet") && !l.contains("fGetNearbySpecObjEq") && !l.contains("--") && !l.contains("ring_galaxies_z") && !l.contains("PrimTarget") && !l.contains("objTypeName") && !l.contains("fiberMag_r") && !l.contains("specclass") && !l.contains("specClass")) {
+          try {
+            if (l.split(";")(7).toLong > 0 && l.split(";")(7).toLong < 99999999)
+              temp.+=(cleanSkyServerQuery(l.replace("&gt;", ">")
+                .replace("&lt;", "<").replace("&amp;", "&").replace("[", " ").replace("ISNULL(", " ")
+                .replace("]", " ").replace("DISTINCT", " ").replace(",0)", " ")
+                .replace("\"Star\"", "star").replace("DR8.", "").replace("DR10.", "")
+                .split(';')(8)).toLowerCase())
+            else
+              counter = counter + 1
+          }
+          catch {
+            case e: Exception =>
+              println(l)
+          }
+        }
+      }
+      println("number of queries: " + temp.size)
+      temp.toList
+    }
+
+    else if (bench.equals("atoka") || bench.equals("test") || bench.equals("tpch")) {
       val src = Source.fromFile(BENCH_DIR + "queryLog.csv").getLines
       src.take(1).next
       for (l <- src)
@@ -857,15 +987,15 @@ println(definition.Paths.pathToSaveSchema)
     map
   }
 
-  def readRDDScanSize(dataDir: String, pathToSynopses: String): mutable.HashMap[RDDScanExec, Long] = {
+  def readRDDScanSize(dataDir: String, pathToSynopses: String): mutable.HashMap[String, Long] = {
     val foldersOfParquetTable = new File(dataDir).listFiles.filter(_.isDirectory) ++ new File(pathToSynopses).listFiles.filter(_.isDirectory)
     val tables = sparkSession.sessionState.catalog.listTables("default").map(t => t.table)
-    val map = mutable.HashMap[RDDScanExec, Long]()
+    val map = mutable.HashMap[String, Long]()
     foldersOfParquetTable.filter(x => tables.contains(x.getName.split("\\.")(0).toLowerCase)).map(x => {
       val lRDD = sparkSession.sessionState.catalog.lookupRelation(org.apache.spark.sql.catalyst.TableIdentifier
       (x.getName.split("\\.")(0), None)).children(0).asInstanceOf[LogicalRDD]
-      (RDDScanExec(lRDD.output, lRDD.rdd, "ExistingRDD", lRDD.outputPartitioning, lRDD.outputOrdering), folderSize(x))
-    }).foreach(x => map.put(x._1, x._2))
+      (RDDScanExec(lRDD.output, lRDD.rdd, "ExistingRDD", lRDD.outputPartitioning, lRDD.outputOrdering), folderSize(x), x.getName.split("\\.")(0).toLowerCase)
+    }).foreach(x => map.put(x._1.output.map(o => x._3 + "." + o.name.split("#")(0)).mkString(";").toLowerCase, x._2))
     map
   }
 

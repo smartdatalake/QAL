@@ -89,10 +89,13 @@ class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.H
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     case t@UniversalSampleWithoutKey(functions, confidence, error, seed, join
       @Join(left, right, joinType, condition)) =>
-      val joinKeyLeft = condition.getOrElse(null).asInstanceOf[EqualTo].left.asInstanceOf[AttributeReference]
-      val joinKeyRight = condition.getOrElse(null).asInstanceOf[EqualTo].right.asInstanceOf[AttributeReference]
-      val rightWithUniversalSample = UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), right)
-      val leftWithUniversalSample = UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), left)
+      val joinKeyLeft = condition.getOrElse(null).asInstanceOf[EqualTo].left.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
+      val joinKeyRight = condition.getOrElse(null).asInstanceOf[EqualTo].right.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
+      val (rightWithUniversalSample,leftWithUniversalSample) = if (right.output.find(x=>x.toString().toLowerCase==joinKeyRight.toString().toLowerCase).isDefined)
+        (UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), right)
+        ,UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), left))
+      else (UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), right)
+        ,UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), left))
       Seq(planLater(Join(leftWithUniversalSample, rightWithUniversalSample, joinType, condition)))
     case t@UniversalSampleWithoutKey(functions, confidence, error, seed, project
       @Project(projectList: Seq[NamedExpression], projectChild: LogicalPlan)) =>
@@ -109,10 +112,12 @@ class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.H
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     case t@UniversalSample(functions, confidence, error, seed, joinKeys, join
       @Join(left, right, joinType, condition)) =>
-      val joinKeyLeft = condition.getOrElse(null).asInstanceOf[EqualTo].left.asInstanceOf[AttributeReference]
-      val joinKeyRight = condition.getOrElse(null).asInstanceOf[EqualTo].right.asInstanceOf[AttributeReference]
-      val rightWithUniversalSample = UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), right)
-      val leftWithUniversalSample = UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), left)
+      val joinKeyLeft = condition.getOrElse(null).asInstanceOf[EqualTo].left.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
+      val joinKeyRight = condition.getOrElse(null).asInstanceOf[EqualTo].right.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
+      val (rightWithUniversalSample,leftWithUniversalSample) = if (right.output.find(x=>x.toString().toLowerCase==joinKeyRight.toString().toLowerCase).isDefined) (UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), right)
+      ,UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), left))
+      else (UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), right)
+        ,UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), left))
       Seq(planLater(Join(leftWithUniversalSample, rightWithUniversalSample, joinType, condition))
         , UniversalSampleExec2(functions, confidence, error, seed, joinKeys, planLater(join)))
     case t@UniversalSample(functions, confidence, error, seed, joinKeys, project
@@ -135,8 +140,10 @@ class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.H
           planLater(Join(DistinctSample(functions, confidence, error, seed, groupingExpressions, left), right, joinType, condition))
         else if (hasIncludeAtt(right.output.map(_.asInstanceOf[AttributeReference]), groupingExpressions.map(_.toAttribute.asInstanceOf[AttributeReference])))
           planLater(Join(left, DistinctSample(functions, confidence, error, seed, groupingExpressions, right), joinType, condition))
-        else
-          throw new Exception("Unable to make distinct sample from two branches")
+        else {
+          return Seq(DistinctSampleExec2(functions,confidence,error,seed,groupingExpressions,planLater(join)))
+        //  throw new Exception("Unable to make distinct sample from two branches")
+        }
       Seq(plan, DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, planLater(join)))
     case t@DistinctSample(functions, confidence, error, seed, groupingExpressions, project
       @Project(projectList: Seq[NamedExpression], projectChild: LogicalPlan)) =>

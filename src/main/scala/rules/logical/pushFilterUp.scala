@@ -1,5 +1,6 @@
 package rules.logical
 
+import breeze.optimize.linear.LinearProgram
 import org.apache.spark.sql.catalyst.expressions.{And, AttributeReference, BinaryComparison, Expression, Or, UnaryExpression}
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, _}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -37,9 +38,9 @@ class pushFilterUp extends Rule[LogicalPlan]{
     if(exp.isInstanceOf[BinaryComparison]) {
       if (exp.asInstanceOf[BinaryComparison].left.isInstanceOf[AttributeReference])
         return Seq(exp.asInstanceOf[BinaryComparison].left.asInstanceOf[AttributeReference])
-      return Seq(exp.asInstanceOf[BinaryComparison].right.asInstanceOf[AttributeReference])
+      return exp.asInstanceOf[BinaryComparison].right.find(_.isInstanceOf[AttributeReference]).map(_.asInstanceOf[AttributeReference]).toSeq
     }
-    Seq(exp.asInstanceOf[UnaryExpression].child.asInstanceOf[AttributeReference])
+    Seq(exp.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference])
   }
   def mergeFiltersCondition(filters:Seq[Filter]):Expression={
     if(filters.size==1)

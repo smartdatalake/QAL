@@ -930,46 +930,57 @@ object TableDefs {
   }
 
   def load_skyServer_tables(sparkSession: SparkSession, DATA_DIR: String) = {
-    val SpecObjAll = sparkSession.read.parquet(DATA_DIR + "SpecObjAll.parquet");
-    sparkSession.sqlContext.createDataFrame(SpecObjAll.rdd, SpecObjAll.schema).createOrReplaceTempView("SpecObjAll");
-    val PlateX = sparkSession.read.parquet(DATA_DIR + "PlateX.parquet");
-    sparkSession.sqlContext.createDataFrame(PlateX.rdd, PlateX.schema).createOrReplaceTempView("PlateX");
-    val SpecPhotoAll = sparkSession.read.parquet(DATA_DIR + "SpecPhotoAll.parquet");
-    sparkSession.sqlContext.createDataFrame(SpecPhotoAll.rdd, SpecPhotoAll.schema).createOrReplaceTempView("SpecPhotoAll");
-    val sppParams = sparkSession.read.parquet(DATA_DIR + "sppParams.parquet");
-    sparkSession.sqlContext.createDataFrame(sppParams.rdd, sppParams.schema).createOrReplaceTempView("sppParams");
-    val SpecObj = sparkSession.read.parquet(DATA_DIR + "SpecObj.parquet");
-    sparkSession.sqlContext.createDataFrame(SpecObj.rdd, SpecObj.schema).createOrReplaceTempView("SpecObj");
-    val PhotoPrimary = sparkSession.read.parquet(DATA_DIR + "PhotoPrimary.parquet");
-    sparkSession.sqlContext.createDataFrame(PhotoPrimary.rdd, PhotoPrimary.schema).createOrReplaceTempView("PhotoPrimary");
+    val SpecObjAll = sparkSession.read.parquet(DATA_DIR + "specobjall.parquet");
+    sparkSession.sqlContext.createDataFrame(SpecObjAll.rdd, SpecObjAll.schema).createOrReplaceTempView("specobjall");
+    val PlateX = sparkSession.read.parquet(DATA_DIR + "plateX.parquet");
+    sparkSession.sqlContext.createDataFrame(PlateX.rdd, PlateX.schema).createOrReplaceTempView("plateX");
+    val SpecObj = sparkSession.read.parquet(DATA_DIR + "specobj.parquet");
+    sparkSession.sqlContext.createDataFrame(SpecObj.rdd, SpecObj.schema).createOrReplaceTempView("specobj");
+    val PhotoPrimary = sparkSession.read.parquet(DATA_DIR + "photoprimary.parquet");
+    sparkSession.sqlContext.createDataFrame(PhotoPrimary.rdd, PhotoPrimary.schema).createOrReplaceTempView("photoprimary");
     val specphoto = sparkSession.read.parquet(DATA_DIR + "specphoto.parquet");
     sparkSession.sqlContext.createDataFrame(specphoto.rdd, specphoto.schema).createOrReplaceTempView("specphoto");
     val photoobj = sparkSession.read.parquet(DATA_DIR + "photoobj.parquet");
     sparkSession.sqlContext.createDataFrame(photoobj.rdd, photoobj.schema).createOrReplaceTempView("photoobj");
-    val wise_xmatch = sparkSession.read.parquet(DATA_DIR + "wise_xmatch.parquet");
-    sparkSession.sqlContext.createDataFrame(wise_xmatch.rdd, wise_xmatch.schema).createOrReplaceTempView("wise_xmatch");
-    val PhotoObjAll = sparkSession.read.parquet(DATA_DIR + "PhotoObjAll.parquet");
-    sparkSession.sqlContext.createDataFrame(PhotoObjAll.rdd, PhotoObjAll.schema).createOrReplaceTempView("PhotoObjAll");
-    val emissionLinesPort = sparkSession.read.parquet(DATA_DIR + "emissionLinesPort.parquet");
-    sparkSession.sqlContext.createDataFrame(emissionLinesPort.rdd, emissionLinesPort.schema).createOrReplaceTempView("emissionLinesPort");
-    val wise_allsky = sparkSession.read.parquet(DATA_DIR + "wise_allsky.parquet");
-    sparkSession.sqlContext.createDataFrame(wise_allsky.rdd, wise_allsky.schema).createOrReplaceTempView("wise_allsky");
-    val galSpecLine = sparkSession.read.parquet(DATA_DIR + "galSpecLine.parquet");
-    sparkSession.sqlContext.createDataFrame(galSpecLine.rdd, galSpecLine.schema).createOrReplaceTempView("galSpecLine");
-    val zooSPec = sparkSession.read.parquet(DATA_DIR + "zooSPec.parquet");
-    sparkSession.sqlContext.createDataFrame(zooSPec.rdd, zooSPec.schema).createOrReplaceTempView("zooSPec");
+    val PhotoObjAll = sparkSession.read.parquet(DATA_DIR + "photoobjall.parquet");
+    sparkSession.sqlContext.createDataFrame(PhotoObjAll.rdd, PhotoObjAll.schema).createOrReplaceTempView("photoobjall");
     val galaxy = sparkSession.read.parquet(DATA_DIR + "galaxy.parquet");
     sparkSession.sqlContext.createDataFrame(galaxy.rdd, galaxy.schema).createOrReplaceTempView("galaxy");
-    val Photoz = sparkSession.read.parquet(DATA_DIR + "Photoz.parquet");
-    sparkSession.sqlContext.createDataFrame(Photoz.rdd, Photoz.schema).createOrReplaceTempView("Photoz");
-    val zooNoSpec = sparkSession.read.parquet(DATA_DIR + "zooNoSpec.parquet");
-    sparkSession.sqlContext.createDataFrame(zooNoSpec.rdd, zooNoSpec.schema).createOrReplaceTempView("zooNoSpec");
-    val GalaxyTag = sparkSession.read.parquet(DATA_DIR + "GalaxyTag.parquet");
-    sparkSession.sqlContext.createDataFrame(GalaxyTag.rdd, GalaxyTag.schema).createOrReplaceTempView("GalaxyTag");
+    val GalaxyTag = sparkSession.read.parquet(DATA_DIR + "galaxytag.parquet");
+    sparkSession.sqlContext.createDataFrame(GalaxyTag.rdd, GalaxyTag.schema).createOrReplaceTempView("galaxytag");
+    val FIRST = sparkSession.read.parquet(DATA_DIR + "first.parquet");
+    sparkSession.sqlContext.createDataFrame(FIRST.rdd, FIRST.schema).createOrReplaceTempView("first");
+    val Field = sparkSession.read.parquet(DATA_DIR + "field.parquet");
+    sparkSession.sqlContext.createDataFrame(Field.rdd, Field.schema).createOrReplaceTempView("field");
+    val SpecPhotoAll = sparkSession.read.parquet(DATA_DIR + "specphotoall.parquet");
+    sparkSession.sqlContext.createDataFrame(SpecPhotoAll.rdd, SpecPhotoAll.schema).createOrReplaceTempView("specphotoall");
+    val sppParams = sparkSession.read.parquet(DATA_DIR + "sppparams.parquet");
+    sparkSession.sqlContext.createDataFrame(sppParams.rdd, sppParams.schema).createOrReplaceTempView("sppparams");
+    val wise_xmatch = sparkSession.read.parquet(DATA_DIR + "wise_xmatch.parquet");
+    sparkSession.sqlContext.createDataFrame(wise_xmatch.rdd, wise_xmatch.schema).createOrReplaceTempView("wise_xmatch");
+    val emissionLinesPort = sparkSession.read.parquet(DATA_DIR + "emissionlinesport.parquet");
+    sparkSession.sqlContext.createDataFrame(emissionLinesPort.rdd, emissionLinesPort.schema).createOrReplaceTempView("emissionlinesport");
+    val wise_allsky = sparkSession.read.parquet(DATA_DIR + "wise_allsky.parquet");
+    sparkSession.sqlContext.createDataFrame(wise_allsky.rdd, wise_allsky.schema).createOrReplaceTempView("wise_allsky");
+    val galSpecLine = sparkSession.read.parquet(DATA_DIR + "galspecline.parquet");
+    sparkSession.sqlContext.createDataFrame(galSpecLine.rdd, galSpecLine.schema).createOrReplaceTempView("galspecline");
+    val zooSPec = sparkSession.read.parquet(DATA_DIR + "zoospec.parquet");
+    sparkSession.sqlContext.createDataFrame(zooSPec.rdd, zooSPec.schema).createOrReplaceTempView("zoospec");
+    val Photoz = sparkSession.read.parquet(DATA_DIR + "photoz.parquet");
+    sparkSession.sqlContext.createDataFrame(Photoz.rdd, Photoz.schema).createOrReplaceTempView("photoz");
+    val zooNoSpec = sparkSession.read.parquet(DATA_DIR + "zoonospec.parquet");
+    sparkSession.sqlContext.createDataFrame(zooNoSpec.rdd, zooNoSpec.schema).createOrReplaceTempView("zoonospec");
     val star = sparkSession.read.parquet(DATA_DIR + "star.parquet");
     sparkSession.sqlContext.createDataFrame(star.rdd, star.schema).createOrReplaceTempView("star");
     val propermotions = sparkSession.read.parquet(DATA_DIR + "propermotions.parquet");
     sparkSession.sqlContext.createDataFrame(propermotions.rdd, propermotions.schema).createOrReplaceTempView("propermotions");
+    val stellarmassstarformingport = sparkSession.read.parquet(DATA_DIR + "stellarmassstarformingport.parquet");
+    sparkSession.sqlContext.createDataFrame(stellarmassstarformingport.rdd, stellarmassstarformingport.schema).createOrReplaceTempView("stellarmassstarformingport");
+    val sdssebossfirefly = sparkSession.read.parquet(DATA_DIR + "sdssebossfirefly.parquet");
+    sparkSession.sqlContext.createDataFrame(sdssebossfirefly.rdd, sdssebossfirefly.schema).createOrReplaceTempView("sdssebossfirefly");
+    val spplines = sparkSession.read.parquet(DATA_DIR + "spplines.parquet");
+    sparkSession.sqlContext.createDataFrame(spplines.rdd, spplines.schema).createOrReplaceTempView("spplines");
+
     //val XXX = sparkSession.read.parquet(DATA_DIR + "XXX.parquet");
     //sparkSession.sqlContext.createDataFrame(XXX.rdd, XXX.schema).createOrReplaceTempView("XXX");
   }
@@ -993,10 +1004,11 @@ object TableDefs {
     //val XXX = sparkSession.read.parquet(DATA_DIR + "XXX.parquet");
     //sparkSession.sqlContext.createDataFrame(XXX.rdd, XXX.schema).createOrReplaceTempView("XXX");
   }
+
   def load_proteus_tables(sparkSession: SparkSession, DATA_DIR: String) = {
-    val tables = (new File(DATA_DIR)).listFiles.filter(x=>x.isFile&&x.getName.contains(".csv"))
-    for(tableFile<-tables){
-      val tableName=tableFile.getName.substring(0,tableFile.getName.indexOf(".")-1)
+    val tables = (new File(DATA_DIR)).listFiles.filter(x => x.isFile && x.getName.contains(".csv"))
+    for (tableFile <- tables) {
+      val tableName = tableFile.getName.substring(0, tableFile.getName.indexOf(".") - 1)
       val tab = sparkSession.read.parquet(DATA_DIR + tableFile.getName);
       sparkSession.sqlContext.createDataFrame(tab.rdd, tab.schema).createOrReplaceTempView(tableName);
     }
