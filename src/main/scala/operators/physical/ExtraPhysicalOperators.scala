@@ -34,14 +34,14 @@ case class RDDScanProteusExec(
   protected override def doExecute(): RDD[InternalRow] = {
     val conf = new Configuration()
     //conf.set("fs.defaultFS", "hdfs://192.168.30.147:8020")
-    val fs= FileSystem.get(conf)
-    val output = fs.create(new Path(dir+name+".csv"))
+    val fs = FileSystem.get(conf)
+    val output = fs.create(new Path(dir + name + ".csv"))
     val writer = new PrintWriter(output)
     Class.forName("org.apache.calcite.avatica.remote.Driver")
     val connection = DriverManager.getConnection("jdbc:avatica:remote:url=http://diascld32.iccluster.epfl.ch:18007;serialization=PROTOBUF", "sdlhshah", "Shah13563556")
-    val t = connection.createStatement.executeQuery("select * from "+name)
-    val columnCNT=t.getMetaData.getColumnCount
-    while(t.next()) {
+    val t = connection.createStatement.executeQuery("select * from " + name)
+    val columnCNT = t.getMetaData.getColumnCount
+    while (t.next()) {
       var row = ""
       for (i <- 1 to columnCNT - 1)
         row += t.getString(i) + ";"
@@ -55,7 +55,7 @@ case class RDDScanProteusExec(
     val numOutputRows = longMetric("numOutputRows")
     sqlContext.read.format("com.databricks.spark.csv")
       .option("delimiter", ";")
-      .load(dir+name+".csv").rdd.map(_.asInstanceOf[InternalRow])
+      .load(dir + name + ".csv").rdd.map(_.asInstanceOf[InternalRow])
 
 
     /*t.next
@@ -75,7 +75,6 @@ case class RDDScanProteusExec(
     System.out.println(t.getMetaData.getSchemaName(3))*/
 
 
-
   }
 }
 
@@ -83,19 +82,19 @@ case class QuantileSampleExec(quantileColAtt:AttributeReference,quantilePart:Int
   override protected def doExecute(): RDD[InternalRow] = {
     val result = new ListBuffer[UnsafeRow]
     val size = child.execute().count()
-    val list=child.execute.map(x => x.getInt(0)).sortBy(x => x).collect().toList
+    val list = child.execute.map(x => x.getInt(0)).sortBy(x => x).collect().toList
     list.takeRight(1000)
     var percent = 100 / quantilePart.toDouble
-    for(i<- 0 until list.size by list.size/quantilePart){
+    for (i <- 0 until list.size by list.size / quantilePart) {
       val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
       row.setDouble(0, percent)
       row.setInt(1, list(i))
       val x = UnsafeProjection.create(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
-      if(percent<100)
+      if (percent < 100)
         result += x(row)
       percent += (100 / quantilePart)
     }
-    val points = child.execute.map(x => x.getInt(0)).sortBy(x => x).collect().sliding((size / (quantilePart-1)).toInt, (size / (quantilePart-1)).toInt).map(x => x.last).toList
+    val points = child.execute.map(x => x.getInt(0)).sortBy(x => x).collect().sliding((size / (quantilePart - 1)).toInt, (size / (quantilePart - 1)).toInt).map(x => x.last).toList
 
     for (point <- points) {
 
@@ -118,15 +117,15 @@ case class QuantileSketchExec(quantilePart:Int, output:Seq[Attribute], child:Dya
     val dr = child.getOrCreateDR()
     val result = new ListBuffer[UnsafeRow]
 
-    val points=dr.getQuantiles(quantilePart)
-    var percent=100/quantilePart.toDouble
+    val points = dr.getQuantiles(quantilePart)
+    var percent = 100 / quantilePart.toDouble
     for (point <- points) {
-      val row = new SpecificInternalRow(output.map(x=>x.asInstanceOf[AttributeReference].dataType).toArray)
-      row.setDouble(0,percent)
-      row.setInt(1,point)
-      val x = UnsafeProjection.create(output.map(x=>x.asInstanceOf[AttributeReference].dataType).toArray)
-      result+=x(row)
-      percent+=(100/quantilePart)
+      val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
+      row.setDouble(0, percent)
+      row.setInt(1, point)
+      val x = UnsafeProjection.create(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
+      result += x(row)
+      percent += (100 / quantilePart)
     }
     SparkContext.getOrCreate().parallelize(result)
   }
@@ -150,15 +149,15 @@ case class BinningSketchExec(binningPart:Int, binningStart:Double, binningEnd:Do
 }
   case class ExtAggregateExec(groupingExpressions: Seq[Expression]
                               , aggregateExpressions: Seq[AggregateExpression]
-                              , children: Seq[SparkPlan]) extends MultiExecNode  {
+                              , children: Seq[SparkPlan]) extends MultiExecNode {
 
 
-    override def output: Seq[Attribute] =  children.flatMap(x=>x.output)
+    override def output: Seq[Attribute] = children.flatMap(x => x.output)
 
-   // override def inputRDDs(): Seq[RDD[InternalRow]] = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].inputRDDs())
+    // override def inputRDDs(): Seq[RDD[InternalRow]] = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].inputRDDs())
 
     //TODO what is doProduce???
-  //  override protected def doProduce(ctx: CodegenContext): String = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].produce(ctx, this)).reduce(_.toString+_.toString)
+    //  override protected def doProduce(ctx: CodegenContext): String = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].produce(ctx, this)).reduce(_.toString+_.toString)
 
     override protected def doExecute(): RDD[InternalRow] = {
       children(0).asInstanceOf[SparkPlan].execute()

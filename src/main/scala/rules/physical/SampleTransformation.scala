@@ -11,15 +11,15 @@ import org.apache.spark.sql.catalyst.plans.logical.{Filter, Join, LeafNode, Logi
 
 import scala.collection.{Seq, mutable}
 import scala.io.Source
-class p(){
-  def apply(plan:SparkPlan): Seq[SparkPlan] = plan match {
-    case s@UniformSampleExec2 (functions:Seq[AggregateExpression], confidence:Double, error:Double,
+class p() {
+  def apply(plan: SparkPlan): Seq[SparkPlan] = plan match {
+    case s@UniformSampleExec2(functions: Seq[AggregateExpression], confidence: Double, error: Double,
     seed: Long,
-    child: SparkPlan)=>
+    child: SparkPlan) =>
       Seq(child)
   }
 }
-class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.HashMap[LogicalRDD,Long]) extends Strategy {
+class SampleTransformation() extends Strategy {
 
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
     /* case Quantile(quantileCol,quantilePart,confidence,error,seed,child)=>
@@ -50,7 +50,7 @@ class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.H
       Seq(ScaleAggregateSampleExec(confidence, error, seed, 0.25, resultExpressions, sample(0)))
     case ApproximatePhysicalAggregationSample(confidence, error, seed, hasJoin, groupingExpressions, functionsWithDistinct: Seq[AggregateExpression]
     , functionsWithoutDistinct: Seq[AggregateExpression], resultExpressions, child)
-      if (groupingExpressions.isEmpty) =>
+      if (groupingExpressions.isEmpty && !hasJoin) =>
       val unifSample =
         if (functionsWithDistinct.isEmpty) {
           AggUtils.planAggregateWithoutDistinct(
@@ -66,6 +66,11 @@ class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.H
             resultExpressions,
             planLater(UniformSample(functionsWithDistinct, confidence, error, seed, child)))
         }
+      //todo fix fraction
+      Seq(ScaleAggregateSampleExec(confidence, error, seed, 0.25, resultExpressions, unifSample(0)))
+    case ApproximatePhysicalAggregationSample(confidence, error, seed, hasJoin, groupingExpressions, functionsWithDistinct: Seq[AggregateExpression]
+    , functionsWithoutDistinct: Seq[AggregateExpression], resultExpressions, child)
+      if (groupingExpressions.isEmpty && hasJoin) =>
       val univSample =
         if (functionsWithDistinct.isEmpty) {
           AggUtils.planAggregateWithoutDistinct(
@@ -82,48 +87,50 @@ class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.H
             planLater(UniversalSampleWithoutKey(functionsWithDistinct, confidence, error, seed, child)))
         }
       //todo fix fraction
-      Seq(ScaleAggregateSampleExec(confidence, error, seed, 0.25, resultExpressions, unifSample(0)),
-        ScaleAggregateSampleExec(confidence, error, seed, 0.25, resultExpressions, univSample(0)))
-
+      Seq(ScaleAggregateSampleExec(confidence, error, seed, 0.25, resultExpressions, univSample(0)))
     //UNIVERSAL withOUT KEY TRANSFORMATION
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     case t@UniversalSampleWithoutKey(functions, confidence, error, seed, join
       @Join(left, right, joinType, condition)) =>
-      val joinKeyLeft = condition.getOrElse(null).asInstanceOf[EqualTo].left.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
-      val joinKeyRight = condition.getOrElse(null).asInstanceOf[EqualTo].right.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
-      val (rightWithUniversalSample,leftWithUniversalSample) = if (right.output.find(x=>x.toString().toLowerCase==joinKeyRight.toString().toLowerCase).isDefined)
+      val joinKeyLeft = getEqualToFromExpression(condition.get)(0).left.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
+      val joinKeyRight = getEqualToFromExpression(condition.get)(0).right.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
+      val (rightWithUniversalSample, leftWithUniversalSample) = if (right.output.find(x => x.toString().toLowerCase == joinKeyRight.toString().toLowerCase).isDefined)
         (UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), right)
-        ,UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), left))
+          , UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), left))
       else (UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), right)
-        ,UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), left))
+        , UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), left))
       Seq(planLater(Join(leftWithUniversalSample, rightWithUniversalSample, joinType, condition)))
+    case t@UniversalSampleWithoutKey(functions, confidence, error, seed, project
+      @Project(projectList: Seq[NamedExpression], join:Join)) =>
+      Seq(UniformSampleExec2(functions, confidence, error, seed, planLater(project)),
+        ProjectExec(projectList,planLater(UniversalSampleWithoutKey(functions, confidence, error, seed, join))))
     case t@UniversalSampleWithoutKey(functions, confidence, error, seed, project
       @Project(projectList: Seq[NamedExpression], projectChild: LogicalPlan)) =>
       Seq(ProjectExec(projectList, planLater(UniversalSampleWithoutKey(functions, confidence, error, seed, projectChild))))
     case t@UniversalSampleWithoutKey(functions, confidence, error, seed, filter
       @Filter(condition: Expression, filterChild: LogicalPlan)) =>
       Seq(FilterExec(condition, planLater(UniversalSampleWithoutKey(functions, confidence, error, seed, filterChild))))
-    case t@UniversalSampleWithoutKey(functions, confidence, error, seed, child
-      @LogicalRDD(a, b, c, d, e)) =>
-      Seq(UniformSampleExec2(functions, confidence, error, seed, planLater(child)))
 
 
     //UNIVERSAL with KEY TRANSFORMATION
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     case t@UniversalSample(functions, confidence, error, seed, joinKeys, join
       @Join(left, right, joinType, condition)) =>
-      val joinKeyLeft = condition.getOrElse(null).asInstanceOf[EqualTo].left.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
-      val joinKeyRight = condition.getOrElse(null).asInstanceOf[EqualTo].right.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
-      val (rightWithUniversalSample,leftWithUniversalSample) = if (right.output.find(x=>x.toString().toLowerCase==joinKeyRight.toString().toLowerCase).isDefined) (UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), right)
-      ,UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), left))
+      val joinKeyLeft = getEqualToFromExpression(condition.get)(0).left.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
+      val joinKeyRight = getEqualToFromExpression(condition.get)(0).right.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference]
+      val (rightWithUniversalSample, leftWithUniversalSample) = if (right.output.find(x => x.toString().toLowerCase == joinKeyRight.toString().toLowerCase).isDefined) (UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), right)
+        , UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), left))
       else (UniversalSample(functions, confidence, error, seed, Seq(joinKeyLeft), right)
-        ,UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), left))
+        , UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), left))
       Seq(planLater(Join(leftWithUniversalSample, rightWithUniversalSample, joinType, condition))
-        , UniversalSampleExec2(functions, confidence, error, seed, joinKeys, planLater(join)))
+        /*, UniversalSampleExec2(functions, confidence, error, seed, joinKeys, planLater(join))*/)
+    case t@UniversalSample(functions, confidence, error, seed, joinKeys, project
+      @Project(projectList: Seq[NamedExpression], logicalRDD@LogicalRDD(a, b, c, d, e))) =>
+      Seq(UniversalSampleExec2(functions, confidence, error, seed, joinKeys, planLater(project)))
     case t@UniversalSample(functions, confidence, error, seed, joinKeys, project
       @Project(projectList: Seq[NamedExpression], projectChild: LogicalPlan)) =>
-      Seq(ProjectExec(projectList, planLater(UniversalSample(functions, confidence, error, seed, joinKeys, projectChild))),
-        UniversalSampleExec2(functions, confidence, error, seed, joinKeys, planLater(project)))
+      Seq(ProjectExec(projectList, planLater(UniversalSample(functions, confidence, error, seed, joinKeys, projectChild)))
+        /*,UniversalSampleExec2(functions, confidence, error, seed, joinKeys, planLater(project))*/)
     case t@UniversalSample(functions, confidence, error, seed, joinKeys, filter
       @Filter(condition: Expression, filterChild: LogicalPlan)) =>
       Seq(FilterExec(condition, planLater(UniversalSample(functions, confidence, error, seed, joinKeys, filterChild))))
@@ -136,19 +143,22 @@ class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.H
     case t@DistinctSample(functions, confidence, error, seed, groupingExpressions, join
       @Join(left, right, joinType, condition)) =>
       val plan =
-        if (hasIncludeAtt(left.output.map(_.asInstanceOf[AttributeReference]), groupingExpressions.map(_.asInstanceOf[AttributeReference]).toSeq))
+        if (hasIncludeAtt(left.output.map(_.asInstanceOf[AttributeReference]), getAttRefOfExps(groupingExpressions)))
           planLater(Join(DistinctSample(functions, confidence, error, seed, groupingExpressions, left), right, joinType, condition))
-        else if (hasIncludeAtt(right.output.map(_.asInstanceOf[AttributeReference]), groupingExpressions.map(_.toAttribute.asInstanceOf[AttributeReference])))
+        else if (hasIncludeAtt(right.output.map(_.asInstanceOf[AttributeReference]), getAttRefOfExps(groupingExpressions)))
           planLater(Join(left, DistinctSample(functions, confidence, error, seed, groupingExpressions, right), joinType, condition))
         else {
-          return Seq(DistinctSampleExec2(functions,confidence,error,seed,groupingExpressions,planLater(join)))
-        //  throw new Exception("Unable to make distinct sample from two branches")
+          return Seq(DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, planLater(join)))
+          //  throw new Exception("Unable to make distinct sample from two branches")
         }
-      Seq(plan, DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, planLater(join)))
+      Seq(plan /*, DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, planLater(join))*/)
+    case t@DistinctSample(functions, confidence, error, seed, groupingExpressions, project
+      @Project(projectList: Seq[NamedExpression], logicalPlan@LogicalRDD(a, b, c, d, e))) =>
+      Seq(DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, planLater(project)))
     case t@DistinctSample(functions, confidence, error, seed, groupingExpressions, project
       @Project(projectList: Seq[NamedExpression], projectChild: LogicalPlan)) =>
-      Seq(ProjectExec(projectList, planLater(DistinctSample(functions, confidence, error, seed, groupingExpressions, projectChild))),
-        DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, planLater(project)))
+      Seq(ProjectExec(projectList, planLater(DistinctSample(functions, confidence, error, seed, groupingExpressions, projectChild)))
+        /*,DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, planLater(project))*/)
     case t@DistinctSample(functions, confidence, error, seed, groupingExpressions, filter
       @Filter(condition: Expression, filterChild: LogicalPlan)) =>
       Seq(FilterExec(condition, planLater(DistinctSample(functions, confidence, error, seed, groupingExpressions, filterChild))))
@@ -162,9 +172,12 @@ class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.H
       @Join(left, right, joinType, condition)) =>
       Seq(UniformSampleExec2(functions, confidence, error, seed, planLater(join)))
     case t@UniformSample(functions, confidence, error, seed, project
+      @Project(projectList: Seq[NamedExpression], logicalRDD@LogicalRDD(a, b, c, d, e))) =>
+      Seq(UniformSampleExec2(functions, confidence, error, seed, planLater(project)))
+    case t@UniformSample(functions, confidence, error, seed, project
       @Project(projectList: Seq[NamedExpression], projectChild: LogicalPlan)) =>
-      Seq(ProjectExec(projectList, planLater(UniformSample(functions, confidence, error, seed, projectChild))),
-        UniformSampleExec2(functions, confidence, error, seed, planLater(project)))
+      Seq(ProjectExec(projectList, planLater(UniformSample(functions, confidence, error, seed, projectChild)))
+        /*,UniformSampleExec2(functions, confidence, error, seed, planLater(project))*/)
     case t@UniformSample(function, confidence, interval, seed, filter
       @Filter(condition: Expression, filterChild: LogicalPlan)) =>
       Seq(FilterExec(condition, planLater(UniformSample(function, confidence, interval, seed, filterChild))))
@@ -179,102 +192,12 @@ class SampleTransformation(sparkSession:SparkSession,mapLogicalRDDSize:mutable.H
     case _ => Nil
   }
 
-  def readOrCreateUniformSampleWithoutCIExec(seed: Long, child: LogicalPlan): SparkPlan = {
-    val sampleExec = UniformSampleExec2WithoutCI(seed, planLater(child))
-    val source = Source.fromFile(pathToSynopsesFileName)
-    for (line <- source.getLines()) {
-      val sampleInfo=line.split(",")(1).split(delimiterSynopsisFileNameAtt)
-      if (sampleInfo(0).equals("UniformWithoutCI")&& sampleExec.output.map(_.name).toSet.subsetOf(sampleInfo(1).split(delimiterSynopsesColumnName).toSet)
-       ) {
-        source.close()
-        val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
-        (line.split(",")(0), None)).children(0).asInstanceOf[LogicalRDD]
-        return RDDScanExec(sampleExec.output, lRRD.rdd, "ExistingUniformSampleWithoutRDD"+costOfPlan(child), lRRD.outputPartitioning, lRRD.outputOrdering)
-      }
-    }
-    source.close()
-    sampleExec
-  }
-
-  def readOrCreateUniformSampleExec(functions: Seq[AggregateExpression], confidence: Double, error: Double, seed: Long,
-                                    child: LogicalPlan): SparkPlan = {
-    val sampleExec = UniformSampleExec2(functions, confidence, error, seed, planLater(child))
-    val source = Source.fromFile(pathToSynopsesFileName)
-    for (line <- source.getLines())
-      if (line.split(",")(1).equals(sampleExec.toString)) {
-        source.close()
-        val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
-        (line.split(",")(0), None)).children(0).asInstanceOf[LogicalRDD]
-        return RDDScanExec(sampleExec.output, lRRD.rdd, "ExistingUniformSampleRDD"+costOfPlan(child), lRRD.outputPartitioning, lRRD.outputOrdering)
-      }
-    source.close()
-    sampleExec
-  }
-
-  def readOrCreateDistinctSampleExec(functions: Seq[AggregateExpression], confidence: Double, error: Double, seed: Long,
-                                     groupingExpressions: Seq[NamedExpression], child: LogicalPlan): SparkPlan = {
-    val sampleExec = DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, planLater(child))
-    val source = Source.fromFile(pathToSynopsesFileName)
-    for (line <- source.getLines()) {
-      val sampleInfo = line.split(",")(1).split(delimiterSynopsisFileNameAtt)
-      if (sampleInfo(0).equals("Distinct") && sampleExec.output.map(_.name).toSet.subsetOf(sampleInfo(1).split(delimiterSynopsesColumnName).toSet)
-        && sampleInfo(2).toDouble >= sampleExec.confidence && sampleInfo(3).toDouble <= sampleExec.error
-        && sampleExec.functions.map(_.toString()).toSet.subsetOf(sampleInfo(5).split(delimiterSynopsesColumnName).toSet)
-        && sampleExec.groupingExpression.map(_.name.split("#")(0)).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)) {
-        source.close()
-        val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
-        (line.split(",")(0), None)).children(0).asInstanceOf[LogicalRDD]
-        return RDDScanExec(sampleExec.output, lRRD.rdd, "ExistingDistinctSampleRDD" + costOfPlan(child), lRRD.outputPartitioning, lRRD.outputOrdering)
-      }
-    }
-    source.close()
-    sampleExec
-  }
-
-  def readOrCreateUniversalSampleExec(functions: Seq[AggregateExpression], confidence: Double, error: Double, seed: Long,
-                                      joinKeys: Seq[AttributeReference], child: LogicalPlan): SparkPlan = {
-    val sampleExec = UniversalSampleExec2(functions, confidence, error, seed, joinKeys, planLater(child))
-    val source = Source.fromFile(pathToSynopsesFileName)
-    for (line <- source.getLines()) {
-      val sampleInfo = line.split(",")(1).split(delimiterSynopsisFileNameAtt)
-      if (sampleInfo(0).equals("Universal") && sampleExec.output.map(_.name).toSet.subsetOf(sampleInfo(1).split(delimiterSynopsesColumnName).toSet)
-        && sampleInfo(2).toDouble >= sampleExec.confidence && sampleInfo(3).toDouble <= sampleExec.error
-        && sampleExec.functions.map(_.toString()).toSet.subsetOf(sampleInfo(5).split(delimiterSynopsesColumnName).toSet)
-        && sampleExec.joinKey.map(_.name.split("#")(0)).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)) {
-        source.close()
-        val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
-        (line.split(",")(0), None)).children(0).asInstanceOf[LogicalRDD]
-        return RDDScanExec(sampleExec.output, lRRD.rdd, "ExistingUniversalSampleRDD," + costOfPlan(child), lRRD.outputPartitioning, lRRD.outputOrdering)
-      }
-    }
-    source.close()
-    sampleExec
-  }
-
   def hasIncludeAtt(atts1: Seq[AttributeReference], atts2: Seq[AttributeReference]): Boolean = {
     var flag = true
     for (att <- atts2)
       if (atts1.filter(_.name.equals(att.name)).size == 0)
         flag = false
     flag
-  }
-
-  def costOfPlan(lp: LogicalPlan): (Long,Long) = lp match {
-    case Filter(a, b) =>
-      (costOfPlan(b)._1, costOfFilter * costOfPlan(b)._1 + costOfPlan(b)._2)
-    case Project(a, b) =>
-      (costOfPlan(b)._1, costOfProject * costOfPlan(b)._1 + costOfPlan(b)._2)
-    case Join(left, right, c, d) =>
-      val leftCost = costOfPlan(left)
-      val rightCost = costOfPlan(right)
-      (leftCost._1 * rightCost._1, costOfJoin * (leftCost._1 * rightCost._1) + (leftCost._2 + rightCost._2))
-    case l@LogicalRDD(a, b, s, d, g) =>
-      val count:Long = mapLogicalRDDSize.getOrElse(l, -1)
-      if (count == -1)
-        throw new Exception("Set number of row for LogicalRDD:" + l.toString())
-      (count, costOfScan * count)
-    case _ =>
-      throw new Exception("No cost is defined for the node")
   }
 
 }
@@ -368,8 +291,6 @@ object ApproximatePhysicalAggregationSample {
 
     case _ => None
   }
-
-
 
 
 }

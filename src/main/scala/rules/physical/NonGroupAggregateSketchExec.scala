@@ -18,12 +18,13 @@ case class GroupAggregateSketchExec(confidence:Double, error:Double, seed:Long, 
   extends AggreagateSketchExec(confidence, error, seed, resultExpressions, functionsWithoutDistinct, hyperRects, logicalScan) {
   var countChildIndex = 0
   val edges = groupingExpressions.map(_.asInstanceOf[AttributeReference])
+
   override protected def doExecute(): RDD[InternalRow] = {
 
     val output = new ListBuffer[UnsafeRow]
     val outputSchema = resultExpressions.map(_.dataType).toArray
     var result = Array.fill[Array[InternalRow]](children.size)(null)
-    val childExecuteSize= if(hasCount== true && children.size>1 ) children.size-2 else children.size-1
+    val childExecuteSize = if (hasCount == true && children.size > 1) children.size - 2 else children.size - 1
     //todo multiple group by key
     //todo row update to unsafe
     for (i <- 0 to children.size - 1)
@@ -31,7 +32,7 @@ case class GroupAggregateSketchExec(confidence:Double, error:Double, seed:Long, 
     for (i <- 0 to result(0).size - 1) {
       val x = UnsafeProjection.create(outputSchema)
       val row = new SpecificInternalRow(outputSchema)
-      row.update(0, result(0)(i).get(0,outputSchema(0)))
+      row.update(0, result(0)(i).get(0, outputSchema(0)))
       for (j <- 0 to childExecuteSize)
         if (outputSchema(j + 1).isInstanceOf[IntegerType])
           row.setInt(j + 1, result(j)(i).getInt(1))
@@ -40,7 +41,7 @@ case class GroupAggregateSketchExec(confidence:Double, error:Double, seed:Long, 
         else if (outputSchema(j + 1).isInstanceOf[StringType])
           row.update(j + 1, UTF8String.fromString(result(j)(i).getLong(1).toString))
         else {
-          val u=(result(j)(i).getDouble(1) / result(countChildIndex)(i).getDouble(1))
+          val u = (result(j)(i).getDouble(1) / result(countChildIndex)(i).getDouble(1))
           row.setDouble(j + 1, BigDecimal(u).setScale(4, BigDecimal.RoundingMode.HALF_UP).toDouble)
         }
 
@@ -62,19 +63,19 @@ case class GroupAggregateSketchExec(confidence:Double, error:Double, seed:Long, 
 
   override def children: Seq[SparkPlan] = {
     val sketches = new ListBuffer[SparkPlan]
-    if(hyperRects==null || IsPointQuery){
+    if (hyperRects == null || IsPointQuery) {
       for (func <- functionsWithoutDistinct) {
-        val p=if(func.aggregateFunction.children(0).isInstanceOf[Cast]) func.aggregateFunction.children(0).children(0) else func.aggregateFunction.children(0)
+        val p = if (func.aggregateFunction.children(0).isInstanceOf[Cast]) func.aggregateFunction.children(0).children(0) else func.aggregateFunction.children(0)
         if (func.aggregateFunction.isInstanceOf[Sum])
           sketches += GroupCountMinSketchExec(p.asInstanceOf[AttributeReference]
-            , groupingExpressions(0), hyperRects,edges(0),confidence, error, seed, func, logicalScan)
+            , groupingExpressions(0), hyperRects, edges(0), confidence, error, seed, func, logicalScan)
         else if (func.aggregateFunction.isInstanceOf[Average]) {
           sketches += GroupCountMinSketchExec(p.asInstanceOf[AttributeReference]
-            , groupingExpressions(0), hyperRects,edges(0),confidence, error, seed, func, logicalScan)
+            , groupingExpressions(0), hyperRects, edges(0), confidence, error, seed, func, logicalScan)
           countChildIndex = -1
         }
         else
-          sketches += GroupCountMinSketchExec(null, groupingExpressions(0),hyperRects, edges(0),confidence, error, seed, func, logicalScan)
+          sketches += GroupCountMinSketchExec(null, groupingExpressions(0), hyperRects, edges(0), confidence, error, seed, func, logicalScan)
       }
       if (countChildIndex == -1) {
         if (hasCount)
@@ -83,12 +84,12 @@ case class GroupAggregateSketchExec(confidence:Double, error:Double, seed:Long, 
               countChildIndex = i
           }
         else {
-          sketches += GroupCountMinSketchExec(null, groupingExpressions(0),hyperRects, edges(0),confidence, error, seed
+          sketches += GroupCountMinSketchExec(null, groupingExpressions(0), hyperRects, edges(0), confidence, error, seed
             , functionsWithoutDistinct(0), logicalScan)
           countChildIndex = sketches.size - 1
         }
       }
-    }else {
+    } else {
       for (func <- functionsWithoutDistinct)
         if (func.aggregateFunction.isInstanceOf[Sum])
           sketches += GroupByMultiDyadicRangeExec(func.aggregateFunction.children(0).children(0).asInstanceOf[AttributeReference]
@@ -162,9 +163,9 @@ case class NonGroupAggregateSketchExec(confidence:Double, error:Double, seed:Lon
     val row = new SpecificInternalRow(outputSchema)
     for (resultExp <- resultExpressions) {
       if ((resultExp.children(0).isInstanceOf[Cast] && resultExp.children(0).children(0).asInstanceOf[AttributeReference].name.contains("avg"))
-        || (resultExp.children(0).isInstanceOf[AttributeReference]&&resultExp.children(0).asInstanceOf[AttributeReference].name.contains("avg"))) {
+        || (resultExp.children(0).isInstanceOf[AttributeReference] && resultExp.children(0).asInstanceOf[AttributeReference].name.contains("avg"))) {
         val u = (result(childIndex)(0).getDouble(1) / result(childIndex + 1)(0).getDouble(1))
-        row.update(outputIndex,UTF8String.fromString( BigDecimal(u).setScale(4, BigDecimal.RoundingMode.HALF_UP).toDouble.toString))
+        row.update(outputIndex, UTF8String.fromString(BigDecimal(u).setScale(4, BigDecimal.RoundingMode.HALF_UP).toDouble.toString))
         outputIndex += 1
         childIndex += 2
       }
@@ -174,7 +175,7 @@ case class NonGroupAggregateSketchExec(confidence:Double, error:Double, seed:Lon
         else if (outputSchema(outputIndex).isInstanceOf[LongType])
           row.update(outputIndex, result(childIndex)(0).getLong(1))
         else if (outputSchema(outputIndex).isInstanceOf[StringType]) {
-          val x=result(0)(0).getInt(1)
+          val x = result(0)(0).getInt(1)
           row.update(outputIndex, UTF8String.fromString(result(childIndex)(0).getLong(1).toString()))
         } else
           row.update(outputIndex, result(childIndex)(0).getDouble(1))
@@ -206,7 +207,7 @@ ProjectExec
         converter(CatalystTypeConverters.convertToCatalyst(row))
       }
     }*/
-   def children: Seq[SparkPlan] = {
+  def children: Seq[SparkPlan] = {
     val sketches = new ListBuffer[DyadicRangeExec]
     for (func <- functionsWithoutDistinct)
       if (func.aggregateFunction.children(0).isInstanceOf[Cast]) {
@@ -234,11 +235,11 @@ ProjectExec
 
 abstract class AggreagateSketchExec(confidence:Double, error:Double, seed:Long, resultExpressions:Seq[NamedExpression]
                                     , functionsWithoutDistinct:Seq[AggregateExpression], hyperRects:Seq[Seq[And]]
-                                    , logicalScan:LogicalRDD) extends MultiExecNode{
+                                    , logicalScan:LogicalRDD) extends MultiExecNode {
 
-//todo fix
-  val IsPointQuery=true//if(hyperRects != null) hyperRects.forall(x=>x.forall(y=>y.left.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value
-    //==y.right.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value)) else false
+  //todo fix
+  val IsPointQuery = true //if(hyperRects != null) hyperRects.forall(x=>x.forall(y=>y.left.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value
+  //==y.right.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value)) else false
 
   def getDimension(hyperRects: Seq[Seq[And]]): Seq[AttributeReference] = {
     val elem = new ListBuffer[AttributeReference]
@@ -250,11 +251,13 @@ abstract class AggreagateSketchExec(confidence:Double, error:Double, seed:Long, 
     }
     elem
   }
+
   var hasCount = false
   functionsWithoutDistinct.foreach(x =>
-    if (x.aggregateFunction.isInstanceOf[Count] ) hasCount = true)
+    if (x.aggregateFunction.isInstanceOf[Count]) hasCount = true)
 
   override def output: Seq[Attribute] = resultExpressions.map(_.toAttribute)
+
   def getUnsafeRow(exp: NamedExpression, value: Long): UnsafeRow = exp.dataType match {
     case StringType => {
       ExpressionEncoder[String].toRow(value.toString()) match {
@@ -286,7 +289,7 @@ case class ScaleAggregateSampleExec(confidence:Double, error:Double, seed:Long, 
 
   override protected def doExecute(): RDD[InternalRow] = {
     //child.executeCollectPublic().foreach(println)
-    child.execute()//.map(scale)
+    child.execute() //.map(scale)
   }
 
   def scale(i: InternalRow): InternalRow = {
@@ -306,9 +309,9 @@ case class ScaleAggregateSampleExec(confidence:Double, error:Double, seed:Long, 
         try {
           row.update(index, UTF8String.fromString(i.getString(index)))
         }
-        catch  {
+        catch {
           case _ =>
-            row.update(index,UTF8String.fromString("0"))
+            row.update(index, UTF8String.fromString("0"))
         }
       }
     }

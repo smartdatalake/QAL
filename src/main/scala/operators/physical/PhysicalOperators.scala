@@ -35,7 +35,7 @@ case class PProject(projectList: Seq[NamedExpression], child: SparkPlan)  extend
           val values = row.split(",")
           val specificInternalRow = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
           for (i <- 0 to specificInternalRow.numFields - 1)
-            specificInternalRow.update(i,UTF8String.fromString (values(i)))
+            specificInternalRow.update(i, UTF8String.fromString(values(i)))
           val x = UnsafeProjection.create(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
           x(specificInternalRow)
         })

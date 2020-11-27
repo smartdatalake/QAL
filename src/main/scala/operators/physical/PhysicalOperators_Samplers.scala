@@ -1,6 +1,7 @@
 package operators.physical
 
 import java.io._
+
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, _}
@@ -9,78 +10,39 @@ import org.apache.spark.sql.catalyst.expressions.codegen.CodegenContext
 import org.apache.spark.sql.catalyst.plans.physical._
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.types._
+
 import scala.collection.{Seq, mutable}
 import scala.util.Random
 import java.io.PrintWriter
 import java.util
+
+import definition.Paths
 import definition.Paths._
+import org.apache.spark.SparkEnv
 
 abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpression],child: SparkPlan) extends UnaryExecNode with CodegenSupport {
 
-  def saveAsParquet(out: RDD[InternalRow], synopsis: String) = {
+  def saveAsCSV(out: RDD[InternalRow], synopsis: String) = {
     println("the next command is saving the sample")
+    val time=System.nanoTime()
     Random.setSeed(System.nanoTime())
-    val name = "sample" + Random.alphanumeric.filter(_.isLetter).take(20).mkString
-    val set=new mutable.HashSet[String]()
-    val projectList=child.output.filter(x=>{
-      if(set.exists(xx=>x.toString()==xx.toString()))
-        false
-        else
-        {
-          set.add(x.toString())
-          true
-        }
-
-    })
-    if(output.size==projectList.size) {
-      out.map(x => {
-        var stringRow = ""
-        for (i <- 0 to x.numFields - 1) {
-          val value = x.get(i, output(i).dataType)
-          if (value == null) {
-            stringRow += delimiterParquetColumn
-          } else
-            stringRow += x.get(i, output(i).dataType) + delimiterParquetColumn
-        }
-        stringRow.dropRight(1)
-      }).saveAsTextFile(pathToSaveSynopses + name)
-      new PrintWriter(new FileOutputStream(new File(pathToSynopsesFileName), true)) {
-        write(name + "," + synopsis + "\n")
-        close
+    val name = "sample" + Random.alphanumeric.filter(_.isLetter).take(20).mkString.toLowerCase
+    out.map(x => {
+      var stringRow = ""
+      for (i <- 0 to x.numFields - 1) {
+        val value = x.get(i, output(i).dataType)
+        if (value == null) {
+          stringRow += delimiterParquetColumn
+        } else
+          stringRow += x.get(i, output(i).dataType) + delimiterParquetColumn
       }
-      new PrintWriter(pathToSaveSchema + name) {
-        write(getHeaderOfOutput(output));
-        close
-      }
-    }
-    else{
-      out.mapPartitionsWithIndex { (index, iter) =>
-        val project = UnsafeProjection.create(projectList, child.output,
-          subexpressionEliminationEnabled)
-        project.initialize(index)
-        iter.map(project)
-      }.map(x => {
-        var stringRow = ""
-        for (i <- 0 to x.numFields - 1) {
-          val value = x.get(i, projectList(i).dataType)
-          if (value == null) {
-            stringRow += delimiterParquetColumn
-          } else
-            stringRow += x.get(i, projectList(i).dataType) + delimiterParquetColumn
-        }
-        stringRow.dropRight(1)
-      }).saveAsTextFile(pathToSaveSynopses + name)
-      new PrintWriter(new FileOutputStream(new File(pathToSynopsesFileName), true)) {
-        write((name + "," + synopsis + "\n"))
-        flush()
-        close
-      }
-      new PrintWriter(pathToSaveSchema + name) {
-        write(projectList.map(_.toAttribute.name).mkString(","));
-        flush()
-        close
-      }
-    }
+      stringRow.dropRight(1)
+    }).saveAsTextFile(pathToSaveSynopses + name/*+SparkEnv.get.executorId*/)
+    ParquetNameToSynopses.put(name, synopsis)
+    SynopsesToParquetName.put(synopsis, name)
+    lastUsedOfParquetSample.put(name, System.nanoTime())
+    parquetNameToHeader.put(name,getHeaderOfOutput(output))
+    timeForSampleConstruction+=(System.nanoTime()-time)/1000000000
     println("I have stored the sample")
   }
 
@@ -118,7 +80,7 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
   } else {
     2
   }*/
-  var fraction = .80
+  var fraction = 1.0
   val fractionStep = 0.001
   val zValue = Array.fill[Double](100)(0.0)
   zValue(99) = 2.58
@@ -262,8 +224,8 @@ case class UniformSampleExec2WithoutCI(seed:Long,child:SparkPlan) extends Sample
           iter
         else
           Iterator()}*/
-   // sampleSize = out.count()
-    saveAsParquet(out, toString())
+    // sampleSize = out.count()
+    saveAsCSV(out, toString())
     out
   }
 
@@ -287,8 +249,8 @@ case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Dou
     val input = child.execute()
     while (true) {
       out = input.sample(false, fraction)
-   //   sampleSize = out.count()
-      saveAsParquet(out, toString())
+      //   sampleSize = out.count()
+      saveAsCSV(out, toString())
       return out
       /*.mapPartitionsWithIndexInternal { (index, iter) =>
         if(index<3)
@@ -345,13 +307,7 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
                                groupingExpression:Seq[NamedExpression],
                                child: SparkPlan) extends SampleExec( confidence,error, functions,child: SparkPlan) {
 
-  val minNumOfOcc = 15
-  private val epsOfTotalCount = 0.00001
-  private val confidenceSketch = 0.99
-  private val seed2 = 45423552
-  val r = scala.util.Random
-  r.setSeed(1234677)
-  val groupValues: Seq[(Int, DataType)] = groupingExpression.map(x => {
+  val groupValues: Seq[(Int, DataType)] = getAttOfExpression(groupingExpression).map(x => {
     var index = -1
     for (i <- 0 to child.output.size - 1)
       if (child.output(i).name.toLowerCase == x.find(_.isInstanceOf[AttributeReference]).get.asInstanceOf[AttributeReference].name.toLowerCase)
@@ -367,6 +323,8 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
       .mkString(delimiterSynopsisFileNameAtt)
 
   protected override def doExecute(): RDD[InternalRow] = {
+    val r = scala.util.Random
+    r.setSeed(seed)
     var out: RDD[InternalRow] = null
     val input = child.execute()
     //todo null are counted
@@ -403,8 +361,8 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
         }
       }
       }
-    //  sampleSize = out.count()
-      saveAsParquet(out, toString())
+      //  sampleSize = out.count()
+      saveAsCSV(out, toString())
       return out
       /*      val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
       var sampleErrorForTargetConfidence = 0.0
@@ -452,29 +410,30 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
 case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:Double, error:Double, seed: Long
                                 ,joinKey:Seq[AttributeReference],child: SparkPlan) extends SampleExec(confidence
   ,error,functions,child: SparkPlan) {
-  val rand = new Random(seed)
-  val a = math.abs(rand.nextInt())
-  val b = math.abs(rand.nextInt())
-  val s = math.abs(rand.nextInt())
+
   val joinAttrs: Seq[(Int, DataType)] = joinKey.map(x => {
     var index = -1
     for (i <- 0 to child.output.size - 1)
       if (child.output(i).name.toLowerCase == x.name.toLowerCase)
         index = i
     if (index == -1)
-        throw new Exception("The grouping key is not in table columns!!!!")
+      throw new Exception("The join key is not in table columns!!!!")
     (index, x.dataType)
   })
 
   override def toString(): String = {
     if (functions == null)
       return Seq("Universal", getHeaderOfOutput(output), confidence, error, fraction
-        , sampleSize, "null", getAttNameOfJoinKey(joinKey)).mkString(delimiterSynopsisFileNameAtt)
+        , sampleSize, "null", getAttNameOfExpression(joinKey).mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
     Seq("Universal", getHeaderOfOutput(output), confidence, error, fraction
-      , functions.mkString(delimiterSynopsesColumnName), getAttNameOfJoinKey(joinKey)).mkString(delimiterSynopsisFileNameAtt)
+      , functions.mkString(delimiterSynopsesColumnName), getAttNameOfExpression(joinKey).mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
   }
 
   override protected def doExecute(): RDD[InternalRow] = {
+    val rand = new Random(seed)
+    val a = math.abs(rand.nextInt())
+    val b = math.abs(rand.nextInt())
+    val s = math.abs(rand.nextInt())
     /*    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for (i <- 0 to folder.size - 1) {
       val sampleInfo = folder(i).getName.split(";")
@@ -509,8 +468,8 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
             List()
         }
       }
-    //  sampleSize = out.count()
-      saveAsParquet(out, toString())
+      //  sampleSize = out.count()
+      saveAsCSV(out, toString())
       return out
 
 

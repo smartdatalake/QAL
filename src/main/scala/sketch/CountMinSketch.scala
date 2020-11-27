@@ -27,10 +27,10 @@ import scala.util.Random
   if (epsilon <= 0 || epsilon >= 1) throw new IllegalArgumentException
   val rand = new Random(seed)
   val delta = 1 - confidence
-  val w: Int = Math.ceil(math.E/ epsilon).toInt
+  val w: Int = Math.ceil(math.E / epsilon).toInt
   var d: Int = Math.ceil(Math.log(1 / delta)).toInt
-  val xxx= Array.ofDim[Int](d,3)
-  for(i <- 0 to d-1) {
+  val xxx = Array.ofDim[Int](d, 3)
+  for (i <- 0 to d - 1) {
     xxx(i)(0) = (math.abs(rand.nextInt()) / 1000)
     xxx(i)(1) = math.abs(rand.nextInt()) / 1000
     xxx(i)(2) = math.abs(rand.nextInt()) / 1000
@@ -46,7 +46,7 @@ import scala.util.Random
     while (i < d) {
       //todo change mode
       countMatrix(i)((((((xxx(i)(0) * key + xxx(i)(1) % xxx(i)(2)) % w + w) % w).toInt))) += increment
-     // countMatrix(i)(1) += increment
+      // countMatrix(i)(1) += increment
       i += 1
     }
   }
@@ -69,13 +69,13 @@ import scala.util.Random
    */
   def get(key: Int): Int = {
     var frequency: Int = Int.MaxValue
-    var i =0
-    while (i < d){
-      if (countMatrix(i)((((((xxx(i)(0)*key+xxx(i)(1))%xxx(i)(2)))% w+w)%w).toInt) < frequency)
-        frequency = countMatrix(i)((((((xxx(i)(0)*key+xxx(i)(1))%xxx(i)(2)))% w+w)%w).toInt)
-    //  if (countMatrix(i)(1) < frequency)
-    //    frequency = countMatrix(i)(1).toInt
-      i+=1
+    var i = 0
+    while (i < d) {
+      if (countMatrix(i)((((((xxx(i)(0) * key + xxx(i)(1)) % xxx(i)(2))) % w + w) % w).toInt) < frequency)
+        frequency = countMatrix(i)((((((xxx(i)(0) * key + xxx(i)(1)) % xxx(i)(2))) % w + w) % w).toInt)
+      //  if (countMatrix(i)(1) < frequency)
+      //    frequency = countMatrix(i)(1).toInt
+      i += 1
     }
     frequency
   }
@@ -89,27 +89,27 @@ import scala.util.Random
       key = hashString(rawKey.value.toString)
     else
       throw new Exception(rawKey.dataType + " is invalid type for countMin sketch get method!!!")
-    var i =0
-    while (i < d){
-      if (countMatrix(i)((((((xxx(i)(0)*key+xxx(i)(1))%xxx(i)(2)))% w+w)%w).toInt) < frequency)
-        frequency = countMatrix(i)((((((xxx(i)(0)*key+xxx(i)(1))%xxx(i)(2)))% w+w)%w).toInt)
-     // if (countMatrix(i)(1) < frequency)
-     //   frequency = countMatrix(i)(1).toInt
-      i+=1
+    var i = 0
+    while (i < d) {
+      if (countMatrix(i)((((((xxx(i)(0) * key + xxx(i)(1)) % xxx(i)(2))) % w + w) % w).toInt) < frequency)
+        frequency = countMatrix(i)((((((xxx(i)(0) * key + xxx(i)(1)) % xxx(i)(2))) % w + w) % w).toInt)
+      // if (countMatrix(i)(1) < frequency)
+      //   frequency = countMatrix(i)(1).toInt
+      i += 1
     }
     frequency
   }
 
   def get(key: String): Int = {
     var frequency: Int = Int.MaxValue
-    var i =0
-    val k=hashString(key)
-    while (i < d){
-      if (countMatrix(i)((((((xxx(i)(0)*k+xxx(i)(1))%xxx(i)(2)))% w+w)%w).toInt) < frequency)
-        frequency = countMatrix(i)((((((xxx(i)(0)*k+xxx(i)(1))%xxx(i)(2)))% w+w)%w).toInt)
+    var i = 0
+    val k = hashString(key)
+    while (i < d) {
+      if (countMatrix(i)((((((xxx(i)(0) * k + xxx(i)(1)) % xxx(i)(2))) % w + w) % w).toInt) < frequency)
+        frequency = countMatrix(i)((((((xxx(i)(0) * k + xxx(i)(1)) % xxx(i)(2))) % w + w) % w).toInt)
       //if (countMatrix(i)(1) < frequency)
       //  frequency = countMatrix(i)(1).toInt
-      i+=1
+      i += 1
     }
     frequency
   }
@@ -131,7 +131,7 @@ import scala.util.Random
 
   def +(that: CountMinSketch) = {
     //todo
-    if (!(this==that)) {
+    if (!(this == that)) {
       throw new Exception("sketches are not in the same shape")
     }
     for (i <- 0 to d - 1)
@@ -140,7 +140,7 @@ import scala.util.Random
     this
   }
 
-  def == (that:CountMinSketch):Boolean={
+  def ==(that: CountMinSketch): Boolean = {
     if (d == 0 || this.w != that.w || this.d != that.d)
       return false
     true

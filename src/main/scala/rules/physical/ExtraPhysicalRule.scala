@@ -3,78 +3,120 @@ package rules.physical
 import operators.physical.{DistinctSampleExec2, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.execution.{LogicalRDD, RDDScanExec, SparkPlan}
+import org.apache.spark.sql.execution.{LogicalRDD, ProjectExec, RDDScanExec, SparkPlan}
 import definition.Paths._
+import jdk.nashorn.internal.ir.UnaryNode
+
 import scala.io.Source
 
 class ExtraPhysicalRule {
 
 }
 
-case class ChangeSampleToScan(sparkSession: SparkSession,pathToSynopsesFileName:String,delimiterSynopsisFileNameAtt:String,delimiterSynopsesColumnName:String) extends Rule[SparkPlan] {
+case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNameAtt:String,delimiterSynopsesColumnName:String) extends Rule[SparkPlan] {
 
   def apply(plan: SparkPlan): SparkPlan = {
     plan.transform {
       case d@DistinctSampleExec2(functions, confidence, error, seed, groupingExpressions, child) =>
-        val source = Source.fromFile(pathToSynopsesFileName)
-        for (line <- source.getLines()) {
-          val sampleInfo = line.substring(27).split(delimiterSynopsisFileNameAtt)
+        for (parquetNameToSynopses<- ParquetNameToSynopses.toList) {
+          val sampleInfo = parquetNameToSynopses._2.split(delimiterSynopsisFileNameAtt)
           if (sampleInfo(0).equals("Distinct") && getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
             && sampleInfo(2).toDouble >= confidence && sampleInfo(3).toDouble <= error
-         //   && functions.map(_.toString()).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)
+            //   && functions.map(_.toString()).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)
             && getAttNameOfExpression(groupingExpressions).toSet.subsetOf(sampleInfo(7).split(delimiterSynopsesColumnName).toSet)) {
-            source.close()
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
-            (line.substring(0,26), None)).children(0).asInstanceOf[LogicalRDD]
-            return RDDScanExec(d.output, lRRD.rdd, "ExistingDistinctSampleRDD", lRRD.outputPartitioning, lRRD.outputOrdering)
+            (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
+            lastUsedOfParquetSample.put(parquetNameToSynopses._1, System.nanoTime())
+            if (d.output.size != lRRD.output.size) {
+              val output = lRRD.output.map(xLRDD => {
+                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(xLRDD.name.toLowerCase))
+                if (p.isDefined)
+                  p.get
+                else
+                  xLRDD
+              })
+              return ProjectExec(d.output, RDDScanExec(output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering))
+            }
+            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1).split(delimiterParquetColumn)))
+              return RDDScanExec(lRRD.output.map(xLRDD => d.output.find(getAttNameOfAtt(_).equals(xLRDD.name.toLowerCase)).get), lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
+            return RDDScanExec(d.output, lRRD.rdd,parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
           }
         }
-        source.close()
         d
       case d@UniformSampleExec2WithoutCI(seed: Long, child: SparkPlan) =>
-        val source = Source.fromFile(pathToSynopsesFileName)
-        for (line <- source.getLines()) {
-          val sampleInfo = line.substring(27).split(delimiterSynopsisFileNameAtt)
-          if (sampleInfo(0).equals("UniformWithoutCI") &&  getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)) {
-            source.close()
+        for (parquetNameToSynopses<- ParquetNameToSynopses.toList) {
+          val sampleInfo = parquetNameToSynopses._2.split(delimiterSynopsisFileNameAtt)
+          if (sampleInfo(0).equals("UniformWithoutCI") && getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)) {
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
-            (line.substring(0,26), None)).children(0).asInstanceOf[LogicalRDD]
-            return RDDScanExec(d.output, lRRD.rdd, "ExistingUniformSampleWithoutRDD", lRRD.outputPartitioning, lRRD.outputOrdering)
+            (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
+            lastUsedOfParquetSample.put(parquetNameToSynopses._1, System.nanoTime())
+            if (d.output.size != lRRD.output.size) {
+              val output = lRRD.output.map(xLRDD => {
+                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(xLRDD.name.toLowerCase))
+                if (p.isDefined)
+                  p.get
+                else
+                  xLRDD
+              })
+              return ProjectExec(d.output, RDDScanExec(output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering))
+            }
+            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1).split(delimiterParquetColumn)))
+              return RDDScanExec(lRRD.output.map(xLRDD => d.output.find(getAttNameOfAtt(_).equals(xLRDD.name.toLowerCase)).get), lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
+            return RDDScanExec(d.output, lRRD.rdd,parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
           }
         }
-        source.close()
         d
       case d@UniformSampleExec2(functions, confidence, error, seed, child) =>
-        val source = Source.fromFile(pathToSynopsesFileName)
-        for (line <- source.getLines()) {
-          val sampleInfo = line.substring(27).split(delimiterSynopsisFileNameAtt)
-          if (sampleInfo(0).equals("Uniform") &&  getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
+        for (parquetNameToSynopses<- ParquetNameToSynopses.toList) {
+          val sampleInfo = parquetNameToSynopses._2.split(delimiterSynopsisFileNameAtt)
+          if (sampleInfo(0).equals("Uniform") && getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
             && sampleInfo(2).toDouble >= confidence && sampleInfo(3).toDouble <= error
-       //     && functions.map(_.toString()).toSet.subsetOf(sampleInfo(5).split(delimiterSynopsesColumnName).toSet)
+          //     && functions.map(_.toString()).toSet.subsetOf(sampleInfo(5).split(delimiterSynopsesColumnName).toSet)
           ) {
-            source.close()
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
-            (line.substring(0,26), None)).children(0).asInstanceOf[LogicalRDD]
-            return RDDScanExec(d.output, lRRD.rdd, "ExistingUniformSampleRDD", lRRD.outputPartitioning, lRRD.outputOrdering)
+            (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
+            lastUsedOfParquetSample.put(parquetNameToSynopses._1, System.nanoTime())
+            if (d.output.size != lRRD.output.size) {
+              val output = lRRD.output.map(xLRDD => {
+                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(xLRDD.name.toLowerCase))
+                if (p.isDefined)
+                  p.get
+                else
+                  xLRDD
+              })
+              return ProjectExec(d.output, RDDScanExec(output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering))
+            }
+            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1).split(delimiterParquetColumn)))
+              return RDDScanExec(lRRD.output.map(xLRDD => d.output.find(getAttNameOfAtt(_).equals(xLRDD.name.toLowerCase)).get), lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
+            return RDDScanExec(d.output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
           }
         }
-        source.close()
         d
       case d@UniversalSampleExec2(functions, confidence, error, seed, joinKey, child) =>
-        val source = Source.fromFile(pathToSynopsesFileName)
-        for (line <- source.getLines()) {
-          val sampleInfo = line.substring(27).split(delimiterSynopsisFileNameAtt)
-          if (sampleInfo(0).equals("Universal") &&  getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
+        for (parquetNameToSynopses<- ParquetNameToSynopses.toList) {
+          val sampleInfo = parquetNameToSynopses._2.split(delimiterSynopsisFileNameAtt)
+          if (sampleInfo(0).equals("Universal") && getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
             && sampleInfo(2).toDouble >= confidence && sampleInfo(3).toDouble <= error
-         //   && functions.map(_.toString()).toSet.subsetOf(sampleInfo(5).split(delimiterSynopsesColumnName).toSet)
-            && joinKey.map(o=>definition.Paths.tableName.get(o.toString().toLowerCase).get +"."+ o.name.split("#")(0)).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)) {
-            source.close()
+            //   && functions.map(_.toString()).toSet.subsetOf(sampleInfo(5).split(delimiterSynopsesColumnName).toSet)
+            && getAttNameOfExpression(joinKey).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)) {
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
-            (line.substring(0,26), None)).children(0).asInstanceOf[LogicalRDD]
-            return RDDScanExec(d.output, lRRD.rdd, "ExistingUniversalSampleRDD,", lRRD.outputPartitioning, lRRD.outputOrdering)
+            (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
+            lastUsedOfParquetSample.put(parquetNameToSynopses._1, System.nanoTime())
+            if (d.output.size != lRRD.output.size) {
+              val output = lRRD.output.map(xLRDD => {
+                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(xLRDD.name.toLowerCase))
+                if (p.isDefined)
+                  p.get
+                else
+                  xLRDD
+              })
+              return ProjectExec(d.output, RDDScanExec(output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering))
+            }
+            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1).split(delimiterParquetColumn)))
+              return RDDScanExec(lRRD.output.map(xLRDD => d.output.find(getAttNameOfAtt(_).equals(xLRDD.name.toLowerCase)).get), lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
+            return RDDScanExec(d.output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
           }
         }
-        source.close()
         d
       case d =>
         d

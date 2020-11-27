@@ -13,11 +13,11 @@ import rules.physical.{SketchPhysicalTransformation, SketchTransformation}
 import scala.collection.{Seq, mutable}
 
 object extraSQLOperators {
-  def execQuantile(sparkSession: SparkSession, tempquery: String,table :String, quantileCol: String, quantilePart: Int
-                   , confidence: Double, error: Double, seed: Long):String = {
+  def execQuantile(sparkSession: SparkSession, tempquery: String, table: String, quantileCol: String, quantilePart: Int
+                   , confidence: Double, error: Double, seed: Long): String = {
     var quantileColAtt: AttributeReference = null
-    var tempQuery=tempquery
-    if (tempQuery.size<40) {
+    var tempQuery = tempquery
+    if (tempQuery.size < 40) {
       var out = "["
       val scan = sparkSession.sqlContext.sql("select * from " + table).queryExecution.optimizedPlan
       for (p <- scan.output.toList)
@@ -34,7 +34,7 @@ object extraSQLOperators {
     val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
     recursiveProcess(sparkSession.sqlContext.sql(tempQuery).queryExecution.analyzed, logicalPlanToTable)
     val sampleParquetToTable: mutable.HashMap[String, String] = new mutable.HashMap()
-    getTableNameToSampleParquet( sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0), logicalPlanToTable, sampleParquetToTable)
+    getTableNameToSampleParquet(sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0), logicalPlanToTable, sampleParquetToTable)
     for (a <- sampleParquetToTable.toList) {
       if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase)) {
         tempQuery = tempQuery.replace(a._2.toUpperCase, a._1)
@@ -42,9 +42,9 @@ object extraSQLOperators {
         sparkSession.experimental.extraOptimizations = Seq()
       }
     }
-   var out = "["
+    var out = "["
     println(sparkSession.sqlContext.sql(tempQuery).queryExecution.executedPlan)
-    val plan=sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
+    val plan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
     for (p <- plan.output.toList)
       if (p.name == quantileCol)
         quantileColAtt = p.asInstanceOf[AttributeReference]
@@ -53,8 +53,8 @@ object extraSQLOperators {
     //optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += (x.mkString(";") + "\n"))
     println(optimizedPhysicalPlans)
 
-    optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.getDouble(0) + ",\"value\":" + x.getInt(1) + "},"+"\n"))
-    out=out.dropRight(2) + "]"
+    optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.getDouble(0) + ",\"value\":" + x.getInt(1) + "}," + "\n"))
+    out = out.dropRight(2) + "]"
     println(out)
     out
   }
@@ -71,14 +71,14 @@ object extraSQLOperators {
     val optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(Binning(binningColAtt, binningPart
       , binningStart, binningEnd, confidence, error, seed, scan))).toList(0)
     //optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += (x.mkString(";") + "\n"))
-    optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"start\":"+x.get(0)+",\"end\":"+x.get(1)+",\"count\":"+x.get(2)+"}," + "\n"))
+    optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"start\":" + x.get(0) + ",\"end\":" + x.get(1) + ",\"count\":" + x.get(2) + "}," + "\n"))
     out.dropRight(2) + "]"
   }
 
   def execDataProfile(sparkSession: SparkSession, dataProfileTable: String, confidence: Double, error: Double
                       , seed: Long) = {
     var out = "["
-    var query_code="select * from " + dataProfileTable
+    var query_code = "select * from " + dataProfileTable
     val scan = sparkSession.sqlContext.sql(query_code).queryExecution.optimizedPlan
     var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(UniformSampleWithoutCI(seed, scan))).toList(0)
     val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
@@ -90,7 +90,7 @@ object extraSQLOperators {
         query_code = query_code.replace(a._2.toUpperCase, a._1)
         sparkSession.experimental.extraStrategies = Seq()
         sparkSession.experimental.extraOptimizations = Seq()
-        optimizedPhysicalPlans=sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan
+        optimizedPhysicalPlans = sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan
       }
     }
     val fraction = 10
@@ -209,10 +209,10 @@ object extraSQLOperators {
           "Unknown"
       }
       //s(i) = schema(i).name + ";" + ttype + ";" + columns(i).toList(1) * fraction + ";" + columns(i).toList(2) * fraction + ";" + columns(i).toList(3) + ";" + columns(i).toList(4) + ";" + columns(i).toList(5) / columns(i).toList(1) + ";" + columns(i).toList(6) * fraction + ";" + columns(i).toList(7) + ";" + columns(i).toList(8) * fraction
-      s(i) = ("{\"name\":\""+schema(i).name + "\",\"type\":\"" + ttype + "\",\"countNonNull\":"
-      + columns(i).toList(1).toInt * fraction + ",\"countDistinct\":" + columns(i).toList(2).toInt * fraction + ",\"min\":"
-      + columns(i).toList(3) + ",\"max\":" + columns(i).toList(4) + ",\"avg\":" + columns(i).toList(5) / columns(i).toList(1)
-      + ",\"sum\":" + columns(i).toList(6) * fraction + ",\"avgDistinct\":" + columns(i).toList(7).toInt + ",\"sumDistinct\":" + columns(i).toList(8) * fraction)+"},"
+      s(i) = ("{\"name\":\"" + schema(i).name + "\",\"type\":\"" + ttype + "\",\"countNonNull\":"
+        + columns(i).toList(1).toInt * fraction + ",\"countDistinct\":" + columns(i).toList(2).toInt * fraction + ",\"min\":"
+        + columns(i).toList(3) + ",\"max\":" + columns(i).toList(4) + ",\"avg\":" + columns(i).toList(5) / columns(i).toList(1)
+        + ",\"sum\":" + columns(i).toList(6) * fraction + ",\"avgDistinct\":" + columns(i).toList(7).toInt + ",\"sumDistinct\":" + columns(i).toList(8) * fraction) + "},"
 
     }
     s.foreach(x => out += (x + "\n"))
@@ -221,9 +221,9 @@ object extraSQLOperators {
 
   def getTableNameToSampleParquet(in: SparkPlan, logicalToTable: mutable.HashMap[String, String], map: mutable.HashMap[String, String]): Unit = {
     in match {
-      case sample@ UniformSampleExec2(functions, confidence, error, seed, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
+      case sample@UniformSampleExec2(functions, confidence, error, seed, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
         map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
-      case sample@UniformSampleExec2WithoutCI(seed,child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
+      case sample@UniformSampleExec2WithoutCI(seed, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
         map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))
       case sample@UniversalSampleExec2(functions, confidence, error, seed, joinKey, child@RDDScanExec(output, rdd, outputPartitioning, outputOrderingSeq, isStreaming)) =>
         map.put(sample.toString() + "_parquet", logicalToTable.getOrElse(output.map(_.name).slice(0, 15).mkString(""), "Missing logical plan to table!!"))

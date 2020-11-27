@@ -19,7 +19,6 @@ object SampleTransformation2 extends Strategy {
     case _ => Nil
   }
 
-
 }
 
 

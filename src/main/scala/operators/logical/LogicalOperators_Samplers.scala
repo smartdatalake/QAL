@@ -55,6 +55,7 @@ case class UniversalSample(functions:Seq[AggregateExpression],confidence:Double,
 case class UniversalSampleWithoutKey(functions:Seq[AggregateExpression],confidence:Double,error:Double,seed: Long,
                            child: LogicalPlan)extends UnaryNode with Serializable {
   override def output: Seq[Attribute] = child.output
-  override def toString(): String = "UnivSample"+functions.toString()+confidence+error+seed+"null"+output.toString()
+
+  override def toString(): String = "UnivSample" + functions.toString() + confidence + error + seed + "null" + output.toString()
 
 }

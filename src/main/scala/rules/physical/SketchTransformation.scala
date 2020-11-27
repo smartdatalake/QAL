@@ -21,7 +21,7 @@ object SketchTransformation extends Strategy with PredicateHelper {
     case _ => Nil
   }
 
-  }
+}
 object SketchPhysicalTransformation extends Strategy {
   def getConditions(expression: Expression): String = {
     val t = expression
@@ -57,8 +57,8 @@ object SketchPhysicalTransformation extends Strategy {
     val out = new ListBuffer[Seq[And]]
     val left = leftt.sortBy(_ (0).left.asInstanceOf[AttributeReference].name)
     val right = rightt.sortBy(_ (0).left.asInstanceOf[AttributeReference].name)
-    if(right.size==0) return left
-    if(left.size==0) return right
+    if (right.size == 0) return left
+    if (left.size == 0) return right
     for (hyperRecLeft <- left)
       for (hyperRecRight <- right) {
         val con = new ListBuffer[And]
@@ -231,20 +231,20 @@ object SketchPhysicalTransformation extends Strategy {
     Seq()
   }
 
-  def getDimension(hyperRects: Seq[Seq[And]]): Int={
+  def getDimension(hyperRects: Seq[Seq[And]]): Int = {
     1
   }
 
   def getPossibleCMSPlan(): TraversableOnce[SparkPlan] = ???
 
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
-    case q@Quantile(quantileCol,quantilePart,confidence,error,seed,child:LogicalRDD)=>
-        Seq(QuantileSketchExec(quantilePart,q.output,DyadicRangeExec(null,confidence,error,seed,null,null,quantileCol,child)))
-    case b@Binning(binningCol,binningPart,binningStart,binningEnd,confidence,error,seed,child:LogicalRDD)=>
-      Seq(BinningSketchExec(binningPart,binningStart,binningEnd,b.output,DyadicRangeExec(null,confidence,error,seed,null,null,binningCol,child)))
-    case ApproximatePhysicalAggregation(confidence, error,seed, hasJoin, groupingExpressions
+    case q@Quantile(quantileCol, quantilePart, confidence, error, seed, child: LogicalRDD) =>
+      Seq(QuantileSketchExec(quantilePart, q.output, DyadicRangeExec(null, confidence, error, seed, null, null, quantileCol, child)))
+    case b@Binning(binningCol, binningPart, binningStart, binningEnd, confidence, error, seed, child: LogicalRDD) =>
+      Seq(BinningSketchExec(binningPart, binningStart, binningEnd, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child)))
+    case ApproximatePhysicalAggregation(confidence, error, seed, hasJoin, groupingExpressions
     , functionsWithDistinct: Seq[AggregateExpression], functionsWithoutDistinct: Seq[AggregateExpression]
-    , resultExpressions,logicalRDD, child)
+    , resultExpressions, logicalRDD, child)
       if functionsWithoutDistinct.forall(expr => expr.isInstanceOf[AggregateExpression])
         && functionsWithDistinct.size == 0 && !groupingExpressions.isEmpty && !hasJoin =>
       var physicalPlans = new ListBuffer[SparkPlan]
@@ -252,21 +252,21 @@ object SketchPhysicalTransformation extends Strategy {
       while (!filterNode.isInstanceOf[Filter] && !filterNode.isInstanceOf[LeafNode])
         filterNode = filterNode.children(0)
 
-        //todo multiple sketches
+      //todo multiple sketches
 
       //make rect as close ranges
 
       val hyperRects = if (filterNode.isInstanceOf[Filter]) Seq(Seq(filterNode.asInstanceOf[Filter].condition.asInstanceOf[And]))
       else null
       //todo asnwer with CMS
-     /*if( hyperRects.forall(x=>x.forall(y=>y.left.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value
+      /*if( hyperRects.forall(x=>x.forall(y=>y.left.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value
         ==y.right.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value)))
       print()*/
-      physicalPlans+=GroupAggregateSketchExec(confidence,error,seed,groupingExpressions,resultExpressions,functionsWithoutDistinct,hyperRects,logicalRDD)
-      //todo mdr is slow
-    case ApproximatePhysicalAggregation(confidence, error,seed, hasJoin, groupingExpressions
+      physicalPlans += GroupAggregateSketchExec(confidence, error, seed, groupingExpressions, resultExpressions, functionsWithoutDistinct, hyperRects, logicalRDD)
+    //todo mdr is slow
+    case ApproximatePhysicalAggregation(confidence, error, seed, hasJoin, groupingExpressions
     , functionsWithDistinct: Seq[AggregateExpression], functionsWithoutDistinct: Seq[AggregateExpression]
-    , resultExpressions,logicalRDD, child)
+    , resultExpressions, logicalRDD, child)
       if functionsWithoutDistinct.forall(expr => expr.isInstanceOf[AggregateExpression])
         && functionsWithDistinct.size == 0 && groupingExpressions.isEmpty && !hasJoin =>
       var physicalPlans = new ListBuffer[SparkPlan]
@@ -274,14 +274,15 @@ object SketchPhysicalTransformation extends Strategy {
       while (!filterNode.isInstanceOf[Filter] && !filterNode.isInstanceOf[LeafNode])
         filterNode = filterNode.children(0)
       if (!filterNode.isInstanceOf[Filter]) {
-        NonGroupAggregateSketchExec(confidence,error,seed,resultExpressions,functionsWithoutDistinct,null,logicalRDD)      }
+        NonGroupAggregateSketchExec(confidence, error, seed, resultExpressions, functionsWithoutDistinct, null, logicalRDD)
+      }
       //make rect as close ranges
       val hyperRects = combineHyperRectangles(filterNode.asInstanceOf[Filter].condition)
       //if(hyperRects.forall(x=>x.forall(y=>y.right.asInstanceOf[Literal].value==y.left.asInstanceOf[Literal].value)))
 
       //physicalPlans++=getPossibleCMSPlan()
       //val sketches = new ListBuffer[MultiDyadicRangeExec]
-      physicalPlans+=NonGroupAggregateSketchExec(confidence,error,seed,resultExpressions,functionsWithoutDistinct,hyperRects,logicalRDD)
+      physicalPlans += NonGroupAggregateSketchExec(confidence, error, seed, resultExpressions, functionsWithoutDistinct, hyperRects, logicalRDD)
       physicalPlans
 
     case PhysicalAggregation(groupingExpressions, aggExpressions, resultExpressions, child)
@@ -403,7 +404,7 @@ object SketchPhysicalTransformation extends Strategy {
 
     if (param != "") {
       val (notNulls, ranges) = getDyadicConditions(conditions)
-    //  sketches += (DyadicRangeExec(DELTA, EPS, SEED, resultExpressions, ranges, notNulls, sketchProjectAtt, sketchLogicalRDD.asInstanceOf[LogicalRDD]))
+      //  sketches += (DyadicRangeExec(DELTA, EPS, SEED, resultExpressions, ranges, notNulls, sketchProjectAtt, sketchLogicalRDD.asInstanceOf[LogicalRDD]))
 
     }
     sketches
@@ -496,7 +497,8 @@ object SketchPhysicalTransformation extends Strategy {
       }
     Seq()
   }
-//todo make close range
+
+  //todo make close range
   def convertBCToAnd(inExpression: BinaryComparison): And = {
     var expression: BinaryComparison = null
     if (inExpression.left.isInstanceOf[Literal]) {
@@ -664,10 +666,10 @@ object SketchPhysicalTransformation extends Strategy {
 }
 object ApproximatePhysicalAggregation {
   type ReturnType =
-    (Double, Double,Long,Boolean, Seq[NamedExpression],Seq[Expression], Seq[Expression], Seq[NamedExpression],LogicalRDD, LogicalPlan)
+    (Double, Double, Long, Boolean, Seq[NamedExpression], Seq[Expression], Seq[Expression], Seq[NamedExpression], LogicalRDD, LogicalPlan)
 
   def unapply(a: Any): Option[ReturnType] = a match {
-    case ApproximateAggregate(confidence, error,seed, groupingExpressions, aggExpressions,output, child) =>
+    case ApproximateAggregate(confidence, error, seed, groupingExpressions, aggExpressions, output, child) =>
       // A single aggregate expression might appear multiple times in resultExpressions.
       // In order to avoid evaluating an individual aggregate function multiple times, we'll
       // build a set of semantically distinct aggregate expressions and re-write expressions so
@@ -732,8 +734,8 @@ object ApproximatePhysicalAggregation {
           "Spark user mailing list.")
       }
       var plan = child
-      var logicalRDD:LogicalRDD=if (child.isInstanceOf[LogicalRDD]) child.asInstanceOf[LogicalRDD] else null
-      var hasJoin=false
+      var logicalRDD: LogicalRDD = if (child.isInstanceOf[LogicalRDD]) child.asInstanceOf[LogicalRDD] else null
+      var hasJoin = false
       while (!plan.isInstanceOf[Join] && !plan.isInstanceOf[LeafNode]) {
         if (plan.isInstanceOf[LogicalRDD])
           logicalRDD = plan.asInstanceOf[LogicalRDD]
@@ -741,9 +743,9 @@ object ApproximatePhysicalAggregation {
       }
       if (plan.isInstanceOf[LogicalRDD])
         logicalRDD = plan.asInstanceOf[LogicalRDD]
-      if(plan.isInstanceOf[Join])
-        hasJoin=true
-      Some((confidence, error, seed,hasJoin,
+      if (plan.isInstanceOf[Join])
+        hasJoin = true
+      Some((confidence, error, seed, hasJoin,
         namedGroupingExpressions.map(_._2),
         functionsWithDistinct,
         functionsWithoutDistinct,
@@ -753,7 +755,6 @@ object ApproximatePhysicalAggregation {
 
     case _ => None
   }
-
 
 }
 

@@ -18,7 +18,7 @@ object tempMain {
     sparkSession.sqlContext.createDataFrame(BRS10K.rdd, BRS10K.schema).createOrReplaceTempView("Table");
     val folder = (new File("/home/hamid/temp/")).listFiles.filter(_.isDirectory)
     for (i <- 0 to folder.size - 1) {
-      if(!folder(i).getName.contains(".parquet")&& !folder.find(_.getName==folder(i).getName+".parquet").isDefined){
+      if (!folder(i).getName.contains(".parquet") && !folder.find(_.getName == folder(i).getName + ".parquet").isDefined) {
 
         println("asd")
       }

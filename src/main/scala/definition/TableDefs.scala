@@ -930,11 +930,11 @@ object TableDefs {
   }
 
   def load_skyServer_tables(sparkSession: SparkSession, DATA_DIR: String) = {
-    val SpecObjAll = sparkSession.read.parquet(DATA_DIR + "specobjall.parquet");
+    val SpecObjAll = sparkSession.read.parquet(DATA_DIR + "specobjall.parquet").drop(colName = "img");
     sparkSession.sqlContext.createDataFrame(SpecObjAll.rdd, SpecObjAll.schema).createOrReplaceTempView("specobjall");
     val PlateX = sparkSession.read.parquet(DATA_DIR + "plateX.parquet");
     sparkSession.sqlContext.createDataFrame(PlateX.rdd, PlateX.schema).createOrReplaceTempView("plateX");
-    val SpecObj = sparkSession.read.parquet(DATA_DIR + "specobj.parquet");
+    val SpecObj = sparkSession.read.parquet(DATA_DIR + "specobj.parquet").drop(colName = "img");
     sparkSession.sqlContext.createDataFrame(SpecObj.rdd, SpecObj.schema).createOrReplaceTempView("specobj");
     val PhotoPrimary = sparkSession.read.parquet(DATA_DIR + "photoprimary.parquet");
     sparkSession.sqlContext.createDataFrame(PhotoPrimary.rdd, PhotoPrimary.schema).createOrReplaceTempView("photoprimary");
@@ -980,6 +980,33 @@ object TableDefs {
     sparkSession.sqlContext.createDataFrame(sdssebossfirefly.rdd, sdssebossfirefly.schema).createOrReplaceTempView("sdssebossfirefly");
     val spplines = sparkSession.read.parquet(DATA_DIR + "spplines.parquet");
     sparkSession.sqlContext.createDataFrame(spplines.rdd, spplines.schema).createOrReplaceTempView("spplines");
+
+    Paths.tableToCount.put("specobjall",SpecObjAll.count())
+    Paths.tableToCount.put("platex",PlateX.count())
+    Paths.tableToCount.put("specobj",SpecObj.count())
+    Paths.tableToCount.put("photoprimary",PhotoPrimary.count())
+    Paths.tableToCount.put("specphoto",specphoto.count())
+    Paths.tableToCount.put("photoobj",photoobj.count())
+    Paths.tableToCount.put("photoobjall",PhotoObjAll.count())
+    Paths.tableToCount.put("galaxy",galaxy.count())
+    Paths.tableToCount.put("galaxytag",GalaxyTag.count())
+    Paths.tableToCount.put("first",FIRST.count())
+    Paths.tableToCount.put("field",Field.count())
+    Paths.tableToCount.put("specphotoall",SpecPhotoAll.count())
+    Paths.tableToCount.put("sppparams",sppParams.count())
+    Paths.tableToCount.put("wise_xmatch",wise_xmatch.count())
+    Paths.tableToCount.put("emissionlinesport",emissionLinesPort.count())
+    Paths.tableToCount.put("wise_allsky",wise_allsky.count())
+    Paths.tableToCount.put("galspecline",galSpecLine.count())
+    Paths.tableToCount.put("zoospec",zooSPec.count())
+    Paths.tableToCount.put("photoz",Photoz.count())
+    Paths.tableToCount.put("zoonospec",zooNoSpec.count())
+    Paths.tableToCount.put("star",star.count())
+    Paths.tableToCount.put("propermotions",propermotions.count())
+    Paths.tableToCount.put("stellarmassstarformingport",stellarmassstarformingport.count())
+    Paths.tableToCount.put("sdssebossfirefly",sdssebossfirefly.count())
+    Paths.tableToCount.put("spplines",spplines.count())
+
 
     //val XXX = sparkSession.read.parquet(DATA_DIR + "XXX.parquet");
     //sparkSession.sqlContext.createDataFrame(XXX.rdd, XXX.schema).createOrReplaceTempView("XXX");

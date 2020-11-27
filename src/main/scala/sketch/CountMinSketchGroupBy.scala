@@ -17,20 +17,20 @@ import org.apache.spark.sql.catalyst.expressions.Literal
 
 
  class CountMinSketchGroupBy(confidence: Double, epsilon:Double, seed:Long) extends Sketch with Serializable {
-  var CMS=new CountMinSketch(confidence,epsilon,seed)
+  var CMS = new CountMinSketch(confidence, epsilon, seed)
   var set: scala.collection.mutable.Set[String] = scala.collection.mutable.Set()
-  var MAXSIZE=1000
+  var MAXSIZE = 1000
 
 
   def update(key: Int, increment: Int = 1) = {
-    CMS.update(key,increment)
-    if(set.size<MAXSIZE)
-    set.+(key.toString)
+    CMS.update(key, increment)
+    if (set.size < MAXSIZE)
+      set.+(key.toString)
   }
 
   def updateString(key: String, increment: Int = 1) = {
-    CMS.update(hashString(key),increment)
-    if(set.size<MAXSIZE)
+    CMS.update(hashString(key), increment)
+    if (set.size < MAXSIZE)
       set.+=(key)
   }
 
@@ -53,19 +53,18 @@ import org.apache.spark.sql.catalyst.expressions.Literal
   }
 
 
-
   def +(that: CountMinSketchGroupBy) = {
     //todo
-    if (!(this==that)) {
+    if (!(this == that)) {
       throw new Exception("sketches are not in the same shape")
     }
-    this.CMS+=that.CMS
+    this.CMS += that.CMS
     // todo less than MAXSIZE
-    this.set++=that.set
+    this.set ++= that.set
     this
   }
 
-  def ==(that:CountMinSketchGroupBy)=this.CMS==that.CMS
+  def ==(that: CountMinSketchGroupBy) = this.CMS == that.CMS
 
   //todo set better p and m
   def hashString(string: String): Int = {
