@@ -1,0 +1,2 @@
+# QAL
+Query Approximation Layer
