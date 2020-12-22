@@ -1,3 +1,4 @@
+
 name := "QAL"
 
 version := "1.0"
@@ -9,10 +10,8 @@ organization := "TUE"
 val algebraVersion = "0.6.0"
 val javaEwahVersion = "1.1.4"
 val sparkVersion = "2.4.3"
-
-resolvers ++= Seq(
-  "apache-snapshots" at "http://repository.apache.org/snapshots/"
-)
+unmanagedResourceDirectories in Compile += {baseDirectory.value / "lib"}
+unmanagedJars in Compile += file("avatica-1.13.0.jar")
 
 libraryDependencies += "org.scala-lang" % "scala-library" % "2.11.12"
 
@@ -24,8 +23,7 @@ dependencyOverrides += "com.fasterxml.jackson.module" % "jackson-module-scala_2.
 
 
 libraryDependencies ++= Seq(
-  "org.apache.calcite.avatica" % "avatica" % "1.13.0",
-  "org.apache.spark" %% "spark-core" % sparkVersion,
+  "org.apache.spark" %% "spark-core" % sparkVersion % "provided",
   "org.apache.spark" %% "spark-yarn" % sparkVersion,
   "org.apache.spark" %% "spark-catalyst" % sparkVersion,
   "org.apache.spark" %% "spark-sql" % sparkVersion,
@@ -40,3 +38,10 @@ libraryDependencies ++= Seq(
   "com.sparkjava" % "spark-core" % "2.9.1",
   "com.sparkjava" % "spark-core" % "2.9.1"
 )
+
+assemblyMergeStrategy in assembly := {
+  case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+  case x => MergeStrategy.first
+}
+
+assemblyJarName in assembly := "SDL_QAL_API.jar"

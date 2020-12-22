@@ -1,7 +1,8 @@
 package operators.physical
 
-import java.io._
+import definition.Paths.{delimiterParquetColumn, delimiterSynopsesColumnName, delimiterSynopsisFileNameAtt, pathToSketches, sketchesMaterialized}
 
+import java.io._
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -16,6 +17,13 @@ import org.apache.spark.unsafe.types.UTF8String
 import scala.collection.Seq
 import scala.collection.mutable.ListBuffer
 import sketch._
+
+abstract class SketchExec(DELTA: Double
+                          , EPS: Double
+                          , SEED: Long
+                          , sketchLogicalRDD:LogicalRDD) extends UnaryExecNode with CodegenSupport{
+  def createSketch():Sketch
+}
 //todo fix toString
 case class CountMinSketchExec(DELTA: Double
                               , EPS: Double
@@ -24,57 +32,37 @@ case class CountMinSketchExec(DELTA: Double
                               , conditions: Seq[Expression]
                               , sketchProjectAtt:NamedExpression
                               //todo we should define scan based on other condition or resultExpression
-                              , sketchLogicalRDD:LogicalRDD) extends UnaryExecNode with CodegenSupport {
+                              , sketchLogicalRDD:LogicalRDD) extends SketchExec (DELTA ,EPS,SEED,sketchLogicalRDD){
   output: Seq[Attribute]
-  // val path="hdfs://145.100.59.58:9000/TASTER/materializedSynopsis"
-  //val path="/home/hamid/TASTER/materializedSynopsis"
-  val path = "/home/sdlhshah/spark-data/materializedSynopsis"
 
   override def inputRDDs(): Seq[RDD[InternalRow]] = child.asInstanceOf[CodegenSupport].inputRDDs()
 
-  override def toString(): String = ("CountMin_" + DELTA + "_" + EPS + "_" + SEED + "_" + "_" + sketchProjectAtt.name.toString())
+  override def toString(): String = Seq("CountMin" , DELTA , EPS , SEED , sketchProjectAtt.name).mkString(delimiterSynopsisFileNameAtt)
 
   override protected def doProduce(ctx: CodegenContext): String = child.asInstanceOf[CodegenSupport].produce(ctx, this)
 
+  override def createSketch()=child.execute().mapPartitionsWithIndex((index, rowIter) => {
+    val countMinS = new CountMinSketch(DELTA, EPS, SEED)
+    while (rowIter.hasNext)
+      if (sketchProjectAtt.dataType.isInstanceOf[StringType])
+        countMinS.updateString(rowIter.next().get(0, sketchProjectAtt.dataType).asInstanceOf[UTF8String].toString)
+      else if (sketchProjectAtt.dataType.isInstanceOf[NumericType])
+        countMinS.update(rowIter.next().get(0, sketchProjectAtt.dataType).toString.toLong)
+      else
+        throw new Exception(sketchProjectAtt.dataType + " is not valid data type for countMin sketch!!!")
+    Iterator(countMinS)
+  }).reduce(_ + _)
+
   override protected def doExecute(): RDD[InternalRow] = {
-
-
-    var cmsRDD: RDD[CountMinSketch] = null
+    val cms: CountMinSketch = sketchesMaterialized.get(toString).get.asInstanceOf[CountMinSketch]
     //todo fix this -1
     var frequency: Long = -1
-    //TODO add materilazioatiopn
-
-    val folder = (new File(path)).listFiles.filter(_.isDirectory).filter(x => x.getName == this.toString())
-    if (folder.size == 0) {
-      cmsRDD = child.execute().mapPartitionsWithIndex((index, rowIter) => {
-        val countMinS = new CountMinSketch(DELTA, EPS, SEED)
-        while (rowIter.hasNext)
-          if (sketchProjectAtt.dataType.isInstanceOf[StringType])
-            countMinS.updateString(rowIter.next().get(0, sketchProjectAtt.dataType).asInstanceOf[UTF8String].toString)
-          else if (sketchProjectAtt.dataType.isInstanceOf[NumericType])
-            countMinS.update(rowIter.next().get(0, sketchProjectAtt.dataType).toString.toLong)
-          else
-            throw new Exception(sketchProjectAtt.dataType + " is not valid data type for countMin sketch!!!")
-        Iterator(countMinS)
-      })
-      cmsRDD.map(x => x.serialise(x)).saveAsTextFile(path + "/" + this.toString())
-    }
-    else {
-      //todo fix serializer
-      val t = new CountMinSketch(DELTA, EPS, SEED)
-      cmsRDD = sparkContext.textFile(path + "/" + this.toString()).map(x => t.deserialise(x))
-    }
-
-
-    val cms = cmsRDD.reduce(_ + _)
     //todo define error bound
     for (point <- conditions)
       if (point.isInstanceOf[EqualTo])
         frequency += (if (point.asInstanceOf[EqualTo].left.isInstanceOf[Literal])
           cms.get(point.asInstanceOf[EqualTo].left.asInstanceOf[Literal])
         else cms.get(point.asInstanceOf[EqualTo].right.asInstanceOf[Literal]))
-
-
     SparkContext.getOrCreate().parallelize((Seq(getUnsafeRow(resultExpressions(0), frequency))))
   }
 
@@ -126,68 +114,59 @@ case class GroupCountMinSketchExec(targetColumn:AttributeReference
                               , SEED: Long
                               , resultExpression:AggregateExpression
                               //todo we should define scan based on other condition or resultExpression
-                              , sketchLogicalRDD:LogicalRDD) extends UnaryExecNode with CodegenSupport {
+                              , sketchLogicalRDD:LogicalRDD) extends SketchExec (DELTA ,EPS,SEED,sketchLogicalRDD) {
   output: Seq[Attribute]
-  // val path="hdfs://145.100.59.58:9000/TASTER/materializedSynopsis"
-  // val path="/home/hamid/TASTER/materializedSynopsis"
-  val path = "/home/sdlhshah/spark-data/materializedSynopsis"
 
   override def inputRDDs(): Seq[RDD[InternalRow]] = child.asInstanceOf[CodegenSupport].inputRDDs()
 
-  override def toString(): String = ("CountMin_" + DELTA + "_" + EPS + "_" + SEED + "_" + "_" + edge.name + "_" + (if (targetColumn == null) "count" else targetColumn.name))
+  override def toString(): String = Seq("GroupCountMin", DELTA, EPS, SEED, edge.name, if (targetColumn == null) "count" else targetColumn.name).mkString(delimiterSynopsisFileNameAtt)
 
   override protected def doProduce(ctx: CodegenContext): String = child.asInstanceOf[CodegenSupport].produce(ctx, this)
 
-  override protected def doExecute(): RDD[InternalRow] = {
-    val name = this.toString()
-    val folder = (new File(path)).listFiles.filter(_.isFile).filter(x => x.getName == name)
-    val CMS: CountMinSketchGroupBy = if (folder.size == 0) {
-      if (targetColumn == null) {
-        child.execute().mapPartitions(rowIter => {
-          val cms = new CountMinSketchGroupBy(DELTA, EPS, SEED)
-          while (rowIter.hasNext) {
-            val row = rowIter.next()
-            if (!row.anyNull) {
-              if (edge.dataType.isInstanceOf[StringType])
-                cms.updateString(row.getString(0))
-              else
-                cms.update(row.getInt(0))
-            }
+  override def createSketch()={
+    if (targetColumn == null) {
+      child.execute().mapPartitions(rowIter => {
+        val cms = new CountMinSketchGroupBy(DELTA, EPS, SEED)
+        while (rowIter.hasNext) {
+          val row = rowIter.next()
+          if (!row.anyNull) {
+            if (edge.dataType.isInstanceOf[StringType])
+              cms.updateString(row.getString(0))
+            else
+              cms.update(row.getInt(0))
           }
-          Iterator(cms)
-        }).reduce(_ + _)
-      }
-      else {
-        child.execute().mapPartitions(rowIter => {
-          val cms = new CountMinSketchGroupBy(DELTA, EPS, SEED)
-          while (rowIter.hasNext) {
-            val row = rowIter.next()
-            if (!row.anyNull) {
-              if (edge.dataType.isInstanceOf[StringType]) {
-                var ppp = row.getString(0)
-                var i = ppp.size - 1
-                if (i > 4) {
-                  while (!ppp(i).isUpper)
-                    i = i - 1
-                  ppp = ppp.substring(i)
-                }
-                cms.updateString(ppp, row.getInt(1))
+
+        }
+        Iterator(cms)
+      }).reduce(_ + _)
+    }
+    else {
+      child.execute().mapPartitions(rowIter => {
+        val cms = new CountMinSketchGroupBy(DELTA, EPS, SEED)
+        while (rowIter.hasNext) {
+          val row = rowIter.next()
+          if (!row.anyNull) {
+            if (edge.dataType.isInstanceOf[StringType]) {
+              var ppp = row.getString(0)
+              var i = ppp.size - 1
+              if (i > 4) {
+                while (!ppp(i).isUpper)
+                  i = i - 1
+                ppp = ppp.substring(i)
               }
-              else
-                cms.update(row.getInt(0), row.getInt(1))
+              cms.updateString(ppp, row.getInt(1))
             }
+            else
+              cms.update(row.getInt(0), row.getInt(1))
           }
-          Iterator(cms)
-        }).reduce(_ + _)
-      }
-    } else {
-      val ois = new ObjectInputStream(new FileInputStream(path + "/" + this.toString()))
-      ois.readObject.asInstanceOf[CountMinSketchGroupBy]
+        }
+        Iterator(cms)
+      }).reduce(_ + _)
     }
-    if (folder.size == 0) {
-      val o = new ObjectOutputStream(new FileOutputStream(path + "/" + this.toString()))
-      o.writeObject(CMS)
-    }
+  }
+
+  override protected def doExecute(): RDD[InternalRow] = {
+    val CMS: CountMinSketchGroupBy = sketchesMaterialized.get(toString).get.asInstanceOf[CountMinSketchGroupBy]
     val ppp = new ListBuffer[UnsafeRow]
     if (condition != null) {
       val p = condition(0)(0).right.children(1).asInstanceOf[Literal].value.toString
@@ -262,46 +241,40 @@ case class GroupByMultiDyadicRangeExec(targetColumn:AttributeReference,groupingE
                                           , edges:Seq[AttributeReference], sketchLogicalRDD:LogicalRDD)
 //todo we should define scan based on other condition or resultExpression
   extends MultiDyadicRangeExec(targetColumn, confidence, error  , SEED  , resultExpression  , hyperRect  , edges , sketchLogicalRDD:LogicalRDD) {
-  // val path="/home/hamid/TASTER/materializedSynopsis"
-  val path = "/home/sdlhshah/spark-data/materializedSynopsis"
+
+  override def createSketch()= {
+    if (targetColumn == null) {
+      child.execute().mapPartitions(rowIter => {
+        val multiDyadicRange = new MultiDyadicRanges(0, Integer.MAX_VALUE, l, edges.map(_.name), confidence, error, SEED)
+        while (rowIter.hasNext) {
+          val row = rowIter.next()
+          val point = new Array[Int](l)
+          for (i <- 0 to l - 1)
+            point(i) = row.get(i, edges(i).dataType).asInstanceOf[Int]
+          multiDyadicRange.update(point)
+        }
+        Iterator(multiDyadicRange)
+      }).reduce(_ + _)
+    }
+    else {
+      child.execute().mapPartitions(rowIter => {
+        val multiDyadicRange = new MultiDyadicRanges(0, Integer.MAX_VALUE, l, edges.map(_.name), confidence, error, SEED)
+        while (rowIter.hasNext) {
+          val row = rowIter.next()
+          val point = new Array[Int](l)
+          for (i <- 0 to l - 1)
+            point(i) = row.get(i, edges(i).dataType).asInstanceOf[Int]
+          multiDyadicRange.update(point, row.get(l, targetColumn.dataType).asInstanceOf[Int])
+        }
+        Iterator(multiDyadicRange)
+      }).reduce(_ + _)
+    }
+  }
 
   override protected def doExecute(): RDD[InternalRow] = {
     //TODO add materilazioatiopn
     val edgeIndex = getGroupingAttEdgeIndex(resultExpression)
-    var MDR: MultiDyadicRanges = null
-    val folder = (new File(path)).listFiles.filter(_.isDirectory).filter(x => x.getName == this.toString())
-    if (folder.size == 0) {
-      MDR = if (targetColumn == null) {
-        child.execute().mapPartitions(rowIter => {
-          val multiDyadicRange = new MultiDyadicRanges(0, Integer.MAX_VALUE, l, edges.map(_.name), confidence, error, SEED)
-          while (rowIter.hasNext) {
-            val row = rowIter.next()
-            val point = new Array[Int](l)
-            for (i <- 0 to l - 1)
-              point(i) = row.get(i, edges(i).dataType).asInstanceOf[Int]
-            multiDyadicRange.update(point)
-          }
-          Iterator(multiDyadicRange)
-        }).reduce(_ + _)
-      }
-      else {
-        child.execute().mapPartitions(rowIter => {
-          val multiDyadicRange = new MultiDyadicRanges(0, Integer.MAX_VALUE, l, edges.map(_.name), confidence, error, SEED)
-          while (rowIter.hasNext) {
-            val row = rowIter.next()
-            val point = new Array[Int](l)
-            for (i <- 0 to l - 1)
-              point(i) = row.get(i, edges(i).dataType).asInstanceOf[Int]
-            multiDyadicRange.update(point, row.get(l, targetColumn.dataType).asInstanceOf[Int])
-          }
-          Iterator(multiDyadicRange)
-        }).reduce(_ + _)
-      }
-      val o = new ObjectOutputStream(new FileOutputStream(path + "/" + this.toString()))
-      o.writeObject(MDR)
-    }
-    else {}
-
+    val MDR: MultiDyadicRanges =   sketchesMaterialized.get(toString).get.asInstanceOf[MultiDyadicRanges]
     val ppp = new ListBuffer[UnsafeRow]
     for (p <- MDR.keys(edgeIndex)) {
       val x = UnsafeProjection.create(Array(groupingExpression.dataType, resultExpression.dataType))
@@ -320,6 +293,9 @@ case class GroupByMultiDyadicRangeExec(targetColumn:AttributeReference,groupingE
 
   override def output: Seq[Attribute] = Seq(groupingExpression.toAttribute, resultExpression.resultAttribute)
 
+  override def toString(): String = Seq("GroupByMultiDyadicRange", confidence, error, SEED, edges.map(_.name).mkString(delimiterSynopsesColumnName), if (targetColumn == null) "count" else targetColumn.name).mkString(delimiterSynopsisFileNameAtt)
+
+
   def getGroupingAttEdgeIndex(att: AggregateExpression): Int = {
     val t = if (att.aggregateFunction.children(0).isInstanceOf[AttributeReference])
       att.aggregateFunction.children(0).asInstanceOf[AttributeReference].name
@@ -337,56 +313,45 @@ case class NonGroupByMultiDyadicRangeExec(targetColumn:AttributeReference, confi
                                           , edges:Seq[AttributeReference], sketchLogicalRDD:LogicalRDD)
 //todo we should define scan based on other condition or resultExpression
   extends MultiDyadicRangeExec(targetColumn,  confidence, error  , SEED  , resultExpression  , hyperRect  , edges , sketchLogicalRDD:LogicalRDD) {
+  override def createSketch(): Sketch = {
+    if (targetColumn == null) {
+      child.execute().mapPartitions(rowIter => {
+        val multiDyadicRange = new MultiDyadicRanges(0, Integer.MAX_VALUE, l, edges.map(_.name), confidence, error, SEED)
+        while (rowIter.hasNext) {
+          val row = rowIter.next()
+          val point = new Array[Int](l)
+          for (i <- 0 to l - 1)
+            point(i) = row.get(i, edges(i).dataType).asInstanceOf[Int]
+          multiDyadicRange.update(point)
+        }
+        Iterator(multiDyadicRange)
+      }).reduce(_ + _)
+    }
+    else {
+      child.execute().mapPartitions(rowIter => {
+        val multiDyadicRange = new MultiDyadicRanges(0, Integer.MAX_VALUE, l, edges.map(_.name), confidence, error, SEED)
+        while (rowIter.hasNext) {
+          val row = rowIter.next()
+          val point = new Array[Int](l)
+          for (i <- 0 to l - 1)
+            if (edges(i).dataType.isInstanceOf[DoubleType])
+              point(i) = math.floor(row.get(i, edges(i).dataType).asInstanceOf[Double] * 1000).toInt
+            else
+              point(i) = row.get(i, edges(i).dataType).asInstanceOf[Int]
+          multiDyadicRange.update(point, row.get(l, targetColumn.dataType).asInstanceOf[Int])
+        }
+        Iterator(multiDyadicRange)
+      }).reduce(_ + _)
+    }
+  }
 
   override protected def doExecute(): RDD[InternalRow] = {
     //TODO add materilazioatiopn
-    //val path="/home/hamid/TASTER/materializedSynopsis"
-    val path = "/home/sdlhshah/spark-data/materializedSynopsis"
-    var MDR: MultiDyadicRanges = null
-    val folder = (new File(path)).listFiles.filter(_.isDirectory).filter(x => x.getName == this.toString())
-    if (folder.size == 0) {
-      if (targetColumn == null) {
-        MDR = child.execute().mapPartitions(rowIter => {
-          val multiDyadicRange = new MultiDyadicRanges(0, Integer.MAX_VALUE, l, edges.map(_.name), confidence, error, SEED)
-          while (rowIter.hasNext) {
-            val row = rowIter.next()
-            val point = new Array[Int](l)
-            for (i <- 0 to l - 1)
-              point(i) = row.get(i, edges(i).dataType).asInstanceOf[Int]
-            multiDyadicRange.update(point)
-          }
-          Iterator(multiDyadicRange)
-        }).reduce(_ + _)
-      }
-      else {
-        MDR = child.execute().mapPartitions(rowIter => {
-          val multiDyadicRange = new MultiDyadicRanges(0, Integer.MAX_VALUE, l, edges.map(_.name), confidence, error, SEED)
-          while (rowIter.hasNext) {
-            val row = rowIter.next()
-            val point = new Array[Int](l)
-            for (i <- 0 to l - 1)
-              if (edges(i).dataType.isInstanceOf[DoubleType])
-                point(i) = math.floor(row.get(i, edges(i).dataType).asInstanceOf[Double] * 1000).toInt
-              else
-                point(i) = row.get(i, edges(i).dataType).asInstanceOf[Int]
-            multiDyadicRange.update(point, row.get(l, targetColumn.dataType).asInstanceOf[Int])
-          }
-          Iterator(multiDyadicRange)
-        }).reduce(_ + _)
-      }
-      val o = new ObjectOutputStream(new FileOutputStream(path + "/" + this.toString()))
-      o.writeObject(MDR)
-    }
-    else {
-      val ois = new ObjectInputStream(new FileInputStream(path + "/MultiDyadicRangesemployees#390.90.15427500315423sum(cast(employees#39 as bigint))ListBuffer(lon#42)"))
-      MDR = ois.readObject.asInstanceOf[MultiDyadicRanges]
-      ois.close
-    }
-
+    val MDR: MultiDyadicRanges = sketchesMaterialized.get(toString).get.asInstanceOf[MultiDyadicRanges]
     SparkContext.getOrCreate().parallelize(Seq(getUnsafeRow(resultExpression.resultAttribute, MDR.get(hyperRect))))
   }
 
-  override def toString(): String = "MultiDyadicRanges" + targetColumn + confidence + error + SEED + resultExpression + edges
+  override def toString(): String = Seq("NonGroupByMultiDyadicRanges", confidence, error, SEED, edges.map(_.name).mkString(delimiterSynopsesColumnName), if (targetColumn == null) "count" else targetColumn.name).mkString(delimiterSynopsisFileNameAtt)
 
 }
 
@@ -397,7 +362,7 @@ abstract class MultiDyadicRangeExec(targetColumn:AttributeReference, confidence:
                                           , hyperRect: Seq[Seq[And]]
                                           , edges:Seq[AttributeReference]
                                           //todo we should define scan based on other condition or resultExpression
-                                          , sketchLogicalRDD:LogicalRDD) extends UnaryExecNode with CodegenSupport {
+                                          , sketchLogicalRDD:LogicalRDD) extends SketchExec (confidence ,error,SEED,sketchLogicalRDD) {
 
   val l = edges.size
 
@@ -478,59 +443,44 @@ case class DyadicRangeExec(targetColumn:AttributeReference,DELTA: Double
                            , ranges: Seq[And]
                            , edge:AttributeReference
                            //todo we should define scan based on other condition or resultExpression
-                           , sketchLogicalRDD:LogicalRDD) extends UnaryExecNode with CodegenSupport {
+                           , sketchLogicalRDD:LogicalRDD) extends SketchExec (DELTA ,EPS,SEED,sketchLogicalRDD) {
   output: Seq[Attribute]
-  //val path = "/home/hamid/TASTER/materializedSynopsis"
-  val path = "/home/sdlhshah/spark-data/materializedSynopsis"
 
   override def inputRDDs(): Seq[RDD[InternalRow]] = child.asInstanceOf[CodegenSupport].inputRDDs()
 
   override protected def doProduce(ctx: CodegenContext): String = child.asInstanceOf[CodegenSupport].produce(ctx, this)
 
-  def getOrCreateDR(): DyadicRanges = {
-    val folder = (new File(path)).listFiles.filter(_.isFile).filter(x => x.getName == this.toString())
-    val DR = if (folder.size == 0) {
-      if (targetColumn == null) {
-        child.execute().mapPartitions(rowIter => {
-          val dyadicRange = new DyadicRanges(0, Integer.MAX_VALUE, DELTA, EPS, SEED)
-          while (rowIter.hasNext) {
-            val row = rowIter.next()
-            if (!row.anyNull) {
-              dyadicRange.update(row.getInt(0))
-            }
+  override def createSketch(): DyadicRanges = {
+    if (targetColumn == null) {
+      child.execute().mapPartitions(rowIter => {
+        val dyadicRange = new DyadicRanges(0, Integer.MAX_VALUE, DELTA, EPS, SEED)
+        while (rowIter.hasNext) {
+          val row = rowIter.next()
+          if (!row.anyNull) {
+            dyadicRange.update(row.getInt(0))
           }
-          Iterator(dyadicRange)
-        }).reduce(_ + _)
-      }
-      else {
-        child.execute().mapPartitions(rowIter => {
-          val dyadicRange = new DyadicRanges(0, Integer.MAX_VALUE, DELTA, EPS, SEED)
-          while (rowIter.hasNext) {
-            val row = rowIter.next()
-            if (!row.anyNull) {
-              dyadicRange.update(row.getInt(0), row.getInt(1))
-            }
-          }
-          Iterator(dyadicRange)
-        }).reduce(_ + _)
-      }
+        }
+        Iterator(dyadicRange)
+      }).reduce(_ + _)
     }
     else {
-      val ois = new ObjectInputStream(new FileInputStream(path + "/" + this.toString()))
-      ois.readObject.asInstanceOf[DyadicRanges]
+      child.execute().mapPartitions(rowIter => {
+        val dyadicRange = new DyadicRanges(0, Integer.MAX_VALUE, DELTA, EPS, SEED)
+        while (rowIter.hasNext) {
+          val row = rowIter.next()
+          if (!row.anyNull) {
+            dyadicRange.update(row.getInt(0), row.getInt(1))
+          }
+        }
+        Iterator(dyadicRange)
+      }).reduce(_ + _)
     }
-    if (folder.size == 0) {
-      val o = new ObjectOutputStream(new FileOutputStream(path + "/" + this.toString()))
-      o.writeObject(DR)
-    }
-    DR
   }
 
   override protected def doExecute(): RDD[InternalRow] = {
     //TODO add materilazioatiopn
     var frequency: Int = 0
-    // var DR: DyadicRanges = null
-    val DR = getOrCreateDR()
+    val DR = sketchesMaterialized.get(toString).get.asInstanceOf[MultiDyadicRanges]
     val output = new ListBuffer[UnsafeRow]
     val x = UnsafeProjection.create(Array(resultExpression.dataType))
     val row = new SpecificInternalRow(Array(resultExpression.dataType))
@@ -588,7 +538,7 @@ case class DyadicRangeExec(targetColumn:AttributeReference,DELTA: Double
     null
   }
 
-  override def toString(): String = ("DyadicRange" + DELTA + "_" + EPS + "_" + SEED + "_" + "_" + edge.name + "_" + (if (targetColumn == null) "count" else targetColumn.name))
+  override def toString(): String = Seq("DyadicRange", DELTA, EPS, SEED, edge.name, (if (targetColumn == null) "count" else targetColumn.name)).mkString(delimiterSynopsisFileNameAtt)
 
   /**
    * @param in Binary comparison of less greater or equalLess or equalGreater

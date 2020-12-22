@@ -1,4 +1,4 @@
-package extraSQLOperators
+package extraSQL
 
 import operators.logical.Quantile
 import operators.physical.QuantileSampleExec

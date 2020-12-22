@@ -2,7 +2,7 @@ package sketch
 
 import scala.util.control.Breaks._
 
-class DyadicRanges( min:Int,max:Int,delta: Double, epsilon:Double,seed:Long) extends Sketch with Serializable {
+class DyadicRanges( min:Int,max:Int,delta: Double, epsilon:Double,seed:Long) extends Sketch  {
 
   if (delta <= 0 || delta >= 1) throw new IllegalArgumentException
   if (epsilon <= 0 || delta >= 1) throw new IllegalArgumentException

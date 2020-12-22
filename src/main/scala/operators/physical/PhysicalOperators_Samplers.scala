@@ -22,9 +22,10 @@ import org.apache.spark.SparkEnv
 
 abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpression],child: SparkPlan) extends UnaryExecNode with CodegenSupport {
 
-  def saveAsCSV(out: RDD[InternalRow], synopsis: String) = {
+  def saveAsCSV(out: RDD[InternalRow], synopsis: String):Unit = {
+    return Unit
     println("the next command is saving the sample")
-    val time=System.nanoTime()
+    val time = System.nanoTime()
     Random.setSeed(System.nanoTime())
     val name = "sample" + Random.alphanumeric.filter(_.isLetter).take(20).mkString.toLowerCase
     out.map(x => {
@@ -37,12 +38,13 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
           stringRow += x.get(i, output(i).dataType) + delimiterParquetColumn
       }
       stringRow.dropRight(1)
-    }).saveAsTextFile(pathToSaveSynopses + name/*+SparkEnv.get.executorId*/)
+    }).saveAsTextFile(pathToSaveSynopses + name /*+SparkEnv.get.executorId*/)
     ParquetNameToSynopses.put(name, synopsis)
     SynopsesToParquetName.put(synopsis, name)
-    lastUsedOfParquetSample.put(name, System.nanoTime())
-    parquetNameToHeader.put(name,getHeaderOfOutput(output))
-    timeForSampleConstruction+=(System.nanoTime()-time)/1000000000
+    lastUsedCounter+=1
+    lastUsedOfParquetSample.put(name, lastUsedCounter)
+    parquetNameToHeader.put(name, getHeaderOfOutput(output))
+    timeForSampleConstruction += (System.nanoTime() - time) / 1000000000
     println("I have stored the sample")
   }
 
@@ -80,7 +82,7 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
   } else {
     2
   }*/
-  var fraction = 1.0
+  val fraction = Paths.fraction
   val fractionStep = 0.001
   val zValue = Array.fill[Double](100)(0.0)
   zValue(99) = 2.58
@@ -219,14 +221,14 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
 
 case class UniformSampleExec2WithoutCI(seed:Long,child:SparkPlan) extends SampleExec(0,0,null,child) {
   override protected def doExecute(): RDD[InternalRow] = {
-    val out = child.execute().sample(false, fraction, seed) /*.mapPartitionsWithIndexInternal { (index, iter) =>
+   child.execute().sample(false, fraction, seed) /*.mapPartitionsWithIndexInternal { (index, iter) =>
         if(index<3)
           iter
         else
           Iterator()}*/
     // sampleSize = out.count()
-    saveAsCSV(out, toString())
-    out
+    //saveAsCSV(out, toString())
+  //  out
   }
 
   override def toString(): String =
@@ -245,21 +247,21 @@ case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Dou
   var seenPartition = 0
 
   protected override def doExecute(): RDD[InternalRow] = {
-    var out: RDD[InternalRow] = null
-    val input = child.execute()
-    while (true) {
-      out = input.sample(false, fraction)
-      //   sampleSize = out.count()
-      saveAsCSV(out, toString())
-      return out
-      /*.mapPartitionsWithIndexInternal { (index, iter) =>
+    // var out: RDD[InternalRow] = null
+    // val input = child.execute()
+    //  while (true) {
+    child.execute().sample(false, fraction)
+    //   sampleSize = out.count()
+    //  saveAsCSV(out, toString())
+    //  return out
+    /*.mapPartitionsWithIndexInternal { (index, iter) =>
         if(index<3)
           iter
         else
           Iterator()}*/
-      //todo multiple operator on sample
-      //todo without Cast
-      /*      var sampleErrorForTargetConfidence = 0.0
+    //todo multiple operator on sample
+    //todo without Cast
+    /*      var sampleErrorForTargetConfidence = 0.0
       var targetError = 0.0
       val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
       this.sampleSize = sampleSize.toInt
@@ -296,17 +298,16 @@ case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Dou
 
       //seenPartition += 1
       fraction += fractionStep*/
-    }
-    out
+    //   }
+    //  out
   }
-
-
 }
 
 case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Double,error:Double,seed: Long,
                                groupingExpression:Seq[NamedExpression],
                                child: SparkPlan) extends SampleExec( confidence,error, functions,child: SparkPlan) {
-
+  val r = scala.util.Random
+  r.setSeed(seed)
   val groupValues: Seq[(Int, DataType)] = getAttOfExpression(groupingExpression).map(x => {
     var index = -1
     for (i <- 0 to child.output.size - 1)
@@ -323,48 +324,47 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
       .mkString(delimiterSynopsisFileNameAtt)
 
   protected override def doExecute(): RDD[InternalRow] = {
-    val r = scala.util.Random
-    r.setSeed(seed)
-    var out: RDD[InternalRow] = null
-    val input = child.execute()
+
+    // var out: RDD[InternalRow] = null
+    // val input =
     //todo null are counted
-    while (true) {
-      out = input.mapPartitionsWithIndex { (index, iter) => {
-        val sketch: mutable.HashMap[String, Int] = new mutable.HashMap[String, Int]()
-        //var sketch = CountMinSketch.create(epsOfTotalCount, confidenceSketch, seed2)
-        iter.flatMap { row =>
-          val tempGroupKey = row.get(groupValues(0)._1, groupValues(0)._2)
-          if (tempGroupKey == null)
-            List()
-          else {
-            var thisRowKey: String = tempGroupKey.toString
-            val curCount = sketch.getOrElse(thisRowKey, 0)
-            if (curCount > 0) {
-              if (curCount < 2 * minNumOfOcc) {
-                sketch.update(thisRowKey, sketch.getOrElse(thisRowKey, 0) + 1)
-                //sketch.add(thisRowKey)
+    //  while (true) {
+    child.execute().mapPartitionsWithIndex { (index, iter) => {
+      val sketch: mutable.HashMap[String, Int] = new mutable.HashMap[String, Int]()
+      //var sketch = CountMinSketch.create(epsOfTotalCount, confidenceSketch, seed2)
+      iter.flatMap { row =>
+        val tempGroupKey = row.get(groupValues(0)._1, groupValues(0)._2)
+        if (tempGroupKey == null)
+          List()
+        else {
+          val thisRowKey: String = tempGroupKey.toString
+          val curCount = sketch.getOrElse(thisRowKey, 0)
+          if (curCount > 0) {
+            if (curCount < 2 * minNumOfOcc) {
+              sketch.update(thisRowKey, sketch.getOrElse(thisRowKey, 0) + 1)
+              //sketch.add(thisRowKey)
+              List(row)
+            } else {
+              val newRand = r.nextDouble
+              if (newRand < fraction) {
                 List(row)
               } else {
-                val newRand = r.nextDouble
-                if (newRand < fraction) {
-                  List(row)
-                } else {
-                  List()
-                }
+                List()
               }
-            } else {
-              sketch.put(thisRowKey, 1)
-              //  sketch.add(thisRowKey)
-              List(row)
             }
+          } else {
+            sketch.put(thisRowKey, 1)
+            //  sketch.add(thisRowKey)
+            List(row)
           }
         }
       }
-      }
-      //  sampleSize = out.count()
-      saveAsCSV(out, toString())
-      return out
-      /*      val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
+    }
+    }
+    //  sampleSize = out.count()
+    // saveAsCSV(out, toString())
+    //  return out
+    /*      val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
       var sampleErrorForTargetConfidence = 0.0
       var targetError = 0.0
       this.sampleSize = out.count()
@@ -402,15 +402,18 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
         return out
       }
       fraction += fractionStep*/
-    }
-    out
+    //  }
+    //  out
   }
 }
 
 case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:Double, error:Double, seed: Long
                                 ,joinKey:Seq[AttributeReference],child: SparkPlan) extends SampleExec(confidence
   ,error,functions,child: SparkPlan) {
-
+  val rand = new Random(seed)
+  val a = math.abs(rand.nextInt())
+  val b = math.abs(rand.nextInt())
+  val s = math.abs(rand.nextInt())
   val joinAttrs: Seq[(Int, DataType)] = joinKey.map(x => {
     var index = -1
     for (i <- 0 to child.output.size - 1)
@@ -430,10 +433,7 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
   }
 
   override protected def doExecute(): RDD[InternalRow] = {
-    val rand = new Random(seed)
-    val a = math.abs(rand.nextInt())
-    val b = math.abs(rand.nextInt())
-    val s = math.abs(rand.nextInt())
+
     /*    val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for (i <- 0 to folder.size - 1) {
       val sampleInfo = folder(i).getName.split(";")
@@ -451,29 +451,29 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
         }
     }*/
     //todo multiple join key
-    var out: RDD[InternalRow] = null
-    val input = child.execute()
+    // var out: RDD[InternalRow] = null
+    //  val input = child.execute()
     //todo null are counted
-    while (true) {
-      out = input.mapPartitionsWithIndex { (index, iter) =>
-        iter.flatMap { row =>
-          val join = if (joinAttrs(0)._2.isInstanceOf[StringType]) hashString(row.get(joinAttrs(0)._1, joinAttrs(0)._2).toString)
-          else row.get(joinAttrs(0)._1, LongType).toString.toLong
-          var t = ((join * a + b) % s) % 100
-          //todo make faster
-          t = if (t < 0) (t + 100) else t
-          if (t < fraction * 100)
-            List(row)
-          else
-            List()
-        }
+    //   while (true) {
+    child.execute().mapPartitionsWithIndex { (index, iter) =>
+      iter.flatMap { row =>
+        val join = if (joinAttrs(0)._2.isInstanceOf[StringType]) hashString(row.get(joinAttrs(0)._1, joinAttrs(0)._2).toString)
+        else row.get(joinAttrs(0)._1, LongType).toString.toLong
+        var t = ((join * a + b) % s) % 100
+        //todo make faster
+        t = if (t < 0) (t + 100) else t
+        if (t < fraction * 100)
+          List(row)
+        else
+          List()
       }
-      //  sampleSize = out.count()
-      saveAsCSV(out, toString())
-      return out
+    }
+    //  sampleSize = out.count()
+    //    saveAsCSV(out, toString())
+    //    return out
 
 
-      /*      val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
+    /*      val (appMean, appVariance, sampleSize) = CLTCal(getTargetColumnIndex(functions(0)), out)
       var targetError = 0.0
       var sampleErrorForTargetConfidence = 0.0
       this.sampleSize = sampleSize.toInt
@@ -509,8 +509,8 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
         return out
       }
       //  fraction += fractionStep*/
-    }
-    out
+    //    }
+    //   out
   }
 }
 /*

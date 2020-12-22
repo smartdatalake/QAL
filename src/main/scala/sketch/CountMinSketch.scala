@@ -21,7 +21,7 @@ import scala.util.Random
  */
 
 
- class CountMinSketch(confidence: Double, epsilon:Double, seed:Long) extends Sketch with Serializable {
+ class CountMinSketch(confidence: Double, epsilon:Double, seed:Long) extends Sketch  {
 
   if (confidence <= 0 || confidence >= 1) throw new IllegalArgumentException
   if (epsilon <= 0 || epsilon >= 1) throw new IllegalArgumentException

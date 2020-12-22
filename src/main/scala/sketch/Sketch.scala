@@ -1,6 +1,6 @@
 package sketch
 
 //todo fix toString
-abstract class Sketch {
+abstract class Sketch extends Serializable{
 
 }

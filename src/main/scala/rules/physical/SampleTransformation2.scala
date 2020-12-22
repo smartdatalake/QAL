@@ -1,6 +1,6 @@
 package rules.physical
 
-import operators.logical.{ApproximateAggregate, ApproximateDistinctJoin, ApproximateUniversalJoin, DistinctSample, Quantile, UniformSample, UniformSampleWithoutCI, UniversalSample}
+import operators.logical.{ApproximateAggregate, ApproximateDistinctJoin, DistinctSample, Quantile, UniformSample, UniformSampleWithoutCI, UniversalSample}
 import operators.physical.{DistinctSampleExec2, DyadicRangeExec, PProject, QuantileSampleExec, QuantileSketchExec, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, EqualTo, EquivalentExpressions, Expression, NamedExpression, PythonUDF}

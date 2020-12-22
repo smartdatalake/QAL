@@ -13,7 +13,7 @@ class ExtraPhysicalRule {
 
 }
 
-case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNameAtt:String,delimiterSynopsesColumnName:String) extends Rule[SparkPlan] {
+case class ChangeSampleToScan(sparkSession: SparkSession) extends Rule[SparkPlan] {
 
   def apply(plan: SparkPlan): SparkPlan = {
     plan.transform {
@@ -26,10 +26,13 @@ case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNa
             && getAttNameOfExpression(groupingExpressions).toSet.subsetOf(sampleInfo(7).split(delimiterSynopsesColumnName).toSet)) {
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
             (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
-            lastUsedOfParquetSample.put(parquetNameToSynopses._1, System.nanoTime())
+            lastUsedCounter+=1
+            lastUsedOfParquetSample.put(parquetNameToSynopses._1, lastUsedCounter)
             if (d.output.size != lRRD.output.size) {
+              var counter=0
               val output = lRRD.output.map(xLRDD => {
-                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(xLRDD.name.toLowerCase))
+                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(sampleInfo(1).split(delimiterParquetColumn)(counter)))
+                counter+=1
                 if (p.isDefined)
                   p.get
                 else
@@ -37,8 +40,9 @@ case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNa
               })
               return ProjectExec(d.output, RDDScanExec(output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering))
             }
-            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1).split(delimiterParquetColumn)))
+            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1))) {
               return RDDScanExec(lRRD.output.map(xLRDD => d.output.find(getAttNameOfAtt(_).equals(xLRDD.name.toLowerCase)).get), lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
+            }
             return RDDScanExec(d.output, lRRD.rdd,parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
           }
         }
@@ -49,10 +53,13 @@ case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNa
           if (sampleInfo(0).equals("UniformWithoutCI") && getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)) {
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
             (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
-            lastUsedOfParquetSample.put(parquetNameToSynopses._1, System.nanoTime())
+            lastUsedCounter+=1
+            lastUsedOfParquetSample.put(parquetNameToSynopses._1, lastUsedCounter)
             if (d.output.size != lRRD.output.size) {
+              var counter=0
               val output = lRRD.output.map(xLRDD => {
-                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(xLRDD.name.toLowerCase))
+                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(sampleInfo(1).split(delimiterParquetColumn)(counter)))
+                counter+=1
                 if (p.isDefined)
                   p.get
                 else
@@ -60,7 +67,7 @@ case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNa
               })
               return ProjectExec(d.output, RDDScanExec(output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering))
             }
-            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1).split(delimiterParquetColumn)))
+            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1)))
               return RDDScanExec(lRRD.output.map(xLRDD => d.output.find(getAttNameOfAtt(_).equals(xLRDD.name.toLowerCase)).get), lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
             return RDDScanExec(d.output, lRRD.rdd,parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
           }
@@ -75,10 +82,13 @@ case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNa
           ) {
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
             (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
-            lastUsedOfParquetSample.put(parquetNameToSynopses._1, System.nanoTime())
+            lastUsedCounter+=1
+            lastUsedOfParquetSample.put(parquetNameToSynopses._1, lastUsedCounter)
             if (d.output.size != lRRD.output.size) {
+              var counter=0
               val output = lRRD.output.map(xLRDD => {
-                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(xLRDD.name.toLowerCase))
+                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(sampleInfo(1).split(delimiterParquetColumn)(counter)))
+                counter+=1
                 if (p.isDefined)
                   p.get
                 else
@@ -86,7 +96,7 @@ case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNa
               })
               return ProjectExec(d.output, RDDScanExec(output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering))
             }
-            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1).split(delimiterParquetColumn)))
+            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1)))
               return RDDScanExec(lRRD.output.map(xLRDD => d.output.find(getAttNameOfAtt(_).equals(xLRDD.name.toLowerCase)).get), lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
             return RDDScanExec(d.output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
           }
@@ -101,10 +111,13 @@ case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNa
             && getAttNameOfExpression(joinKey).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)) {
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
             (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
-            lastUsedOfParquetSample.put(parquetNameToSynopses._1, System.nanoTime())
+            lastUsedCounter+=1
+            lastUsedOfParquetSample.put(parquetNameToSynopses._1, lastUsedCounter)
             if (d.output.size != lRRD.output.size) {
+              var counter=0
               val output = lRRD.output.map(xLRDD => {
-                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(xLRDD.name.toLowerCase))
+                val p = d.output.find(xSample => getAttNameOfAtt(xSample).equals(sampleInfo(1).split(delimiterParquetColumn)(counter)))
+                counter+=1
                 if (p.isDefined)
                   p.get
                 else
@@ -112,7 +125,7 @@ case class ChangeSampleToScan(sparkSession: SparkSession,delimiterSynopsisFileNa
               })
               return ProjectExec(d.output, RDDScanExec(output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering))
             }
-            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1).split(delimiterParquetColumn)))
+            if (!getHeaderOfOutput(d.output).equals(sampleInfo(1)))
               return RDDScanExec(lRRD.output.map(xLRDD => d.output.find(getAttNameOfAtt(_).equals(xLRDD.name.toLowerCase)).get), lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
             return RDDScanExec(d.output, lRRD.rdd, parquetNameToSynopses._1, lRRD.outputPartitioning, lRRD.outputOrdering)
           }

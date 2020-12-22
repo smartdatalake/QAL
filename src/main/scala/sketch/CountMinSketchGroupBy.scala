@@ -16,7 +16,7 @@ import org.apache.spark.sql.catalyst.expressions.Literal
  */
 
 
- class CountMinSketchGroupBy(confidence: Double, epsilon:Double, seed:Long) extends Sketch with Serializable {
+ class CountMinSketchGroupBy(confidence: Double, epsilon:Double, seed:Long) extends Sketch  {
   var CMS = new CountMinSketch(confidence, epsilon, seed)
   var set: scala.collection.mutable.Set[String] = scala.collection.mutable.Set()
   var MAXSIZE = 1000
@@ -24,13 +24,13 @@ import org.apache.spark.sql.catalyst.expressions.Literal
 
   def update(key: Int, increment: Int = 1) = {
     CMS.update(key, increment)
-    if (set.size < MAXSIZE)
+    if (!set.contains(key.toString))
       set.+(key.toString)
   }
 
   def updateString(key: String, increment: Int = 1) = {
     CMS.update(hashString(key), increment)
-    if (set.size < MAXSIZE)
+    if (!set.contains(key))
       set.+=(key)
   }
 

@@ -1,8 +1,9 @@
 package operators.physical
 
+import definition.Paths.sketchesMaterialized
+
 import java.io.PrintWriter
 import java.sql.DriverManager
-
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.SparkContext
@@ -14,6 +15,7 @@ import org.apache.spark.sql.catalyst.plans.physical.{Partitioning, UnknownPartit
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.execution.{LeafExecNode, SparkPlan, UnaryExecNode}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, Metadata}
+import sketch.{DyadicRanges, MultiDyadicRanges}
 
 import scala.collection.Seq
 import scala.collection.mutable.ListBuffer
@@ -114,7 +116,7 @@ case class BinningSampleExec(binningPart:Int, binningStart:Double, binningEnd:Do
 
 case class QuantileSketchExec(quantilePart:Int, output:Seq[Attribute], child:DyadicRangeExec)extends UnaryExecNode {
   override protected def doExecute(): RDD[InternalRow] = {
-    val dr = child.getOrCreateDR()
+    val dr = sketchesMaterialized.get(child.toString).get.asInstanceOf[DyadicRanges]
     val result = new ListBuffer[UnsafeRow]
 
     val points = dr.getQuantiles(quantilePart)
@@ -133,7 +135,7 @@ case class QuantileSketchExec(quantilePart:Int, output:Seq[Attribute], child:Dya
 case class BinningSketchExec(binningPart:Int, binningStart:Double, binningEnd:Double, output:Seq[Attribute], child:DyadicRangeExec)
   extends UnaryExecNode {
   override protected def doExecute(): RDD[InternalRow] = {
-    val dr = child.getOrCreateDR()
+    val dr = sketchesMaterialized.get(child.toString).get.asInstanceOf[DyadicRanges]
     val result = new ListBuffer[UnsafeRow]
     val bucketSize = (binningEnd - binningStart) / binningPart
     for (i <- 0 to binningPart-1) {

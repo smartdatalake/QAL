@@ -1,6 +1,6 @@
 package rules.physical
 import definition.Paths._
-import operators.logical.{ApproximateAggregate, ApproximateUniversalJoin, DistinctSample, Quantile, UniformSample, UniformSampleWithoutCI, UniversalSample, UniversalSampleWithoutKey}
+import operators.logical.{ApproximateAggregate, DistinctSample, Quantile, UniformSample, UniformSampleWithoutCI, UniversalSample, UniversalSampleWithoutKey}
 import operators.physical.{DistinctSampleExec2, QuantileSampleExec, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, EqualTo, EquivalentExpressions, Expression, NamedExpression, PythonUDF}
@@ -19,7 +19,7 @@ class p() {
       Seq(child)
   }
 }
-class SampleTransformation() extends Strategy {
+object SampleTransformation extends Strategy {
 
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
     /* case Quantile(quantileCol,quantilePart,confidence,error,seed,child)=>
@@ -101,9 +101,9 @@ class SampleTransformation() extends Strategy {
         , UniversalSample(functions, confidence, error, seed, Seq(joinKeyRight), left))
       Seq(planLater(Join(leftWithUniversalSample, rightWithUniversalSample, joinType, condition)))
     case t@UniversalSampleWithoutKey(functions, confidence, error, seed, project
-      @Project(projectList: Seq[NamedExpression], join:Join)) =>
-      Seq(UniformSampleExec2(functions, confidence, error, seed, planLater(project)),
-        ProjectExec(projectList,planLater(UniversalSampleWithoutKey(functions, confidence, error, seed, join))))
+      @Project(projectList: Seq[NamedExpression], join: Join)) =>
+      Seq(/*UniformSampleExec2(functions, confidence, error, seed, planLater(project)),*/
+        ProjectExec(projectList, planLater(UniversalSampleWithoutKey(functions, confidence, error, seed, join))))
     case t@UniversalSampleWithoutKey(functions, confidence, error, seed, project
       @Project(projectList: Seq[NamedExpression], projectChild: LogicalPlan)) =>
       Seq(ProjectExec(projectList, planLater(UniversalSampleWithoutKey(functions, confidence, error, seed, projectChild))))
@@ -186,9 +186,10 @@ class SampleTransformation() extends Strategy {
       Seq(UniformSampleExec2(functions, confidence, error, seed, planLater(child)))
 
     case q@Quantile(quantileColAtt, quantilePart, confidence, error, seed, child) =>
-      Seq(QuantileSampleExec(quantileColAtt, quantilePart, planLater(ApproximateUniversalJoin(confidence, error, seed
-        , null, child))))
-    //Seq(QuantileSampleExec(quantileColAtt, quantilePart, planLater( child)))
+      if (checkJoin(child))
+        Seq(QuantileSampleExec(quantileColAtt, quantilePart, planLater(UniversalSampleWithoutKey(null, confidence, error, seed, child))))
+      else
+        Seq(QuantileSampleExec(quantileColAtt, quantilePart, planLater(UniformSample(null, confidence, error, seed, child))))
     case _ => Nil
   }
 
@@ -270,19 +271,7 @@ object ApproximatePhysicalAggregationSample {
         sys.error("You hit a query analyzer bug. Please report your query to " +
           "Spark user mailing list.")
       }
-      var plan = child
-      var logicalRDD: LogicalRDD = if (child.isInstanceOf[LogicalRDD]) child.asInstanceOf[LogicalRDD] else null
-      var hasJoin = false
-      while (!plan.isInstanceOf[Join] && !plan.isInstanceOf[LeafNode]) {
-        if (plan.isInstanceOf[LogicalRDD])
-          logicalRDD = plan.asInstanceOf[LogicalRDD]
-        plan = plan.children(0)
-      }
-      if (plan.isInstanceOf[LogicalRDD])
-        logicalRDD = plan.asInstanceOf[LogicalRDD]
-      if (plan.isInstanceOf[Join])
-        hasJoin = true
-      Some((confidence, error, seed, hasJoin,
+      Some((confidence, error, seed, checkJoin(child),
         namedGroupingExpressions.map(_._2),
         functionsWithDistinct,
         functionsWithoutDistinct,
@@ -291,7 +280,6 @@ object ApproximatePhysicalAggregationSample {
 
     case _ => None
   }
-
 
 }
 

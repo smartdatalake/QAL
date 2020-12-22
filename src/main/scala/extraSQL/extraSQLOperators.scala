@@ -1,18 +1,40 @@
-package extraSQLOperators
+package extraSQL
 
+import definition.Paths.{ParquetNameToSynopses, SynopsesToParquetName, getHeaderOfOutput, lastUsedCounter, lastUsedOfParquetSample, numberOfGeneratedSynopses, parquetNameToHeader, pathToSaveSynopses, sketchesMaterialized, warehouseParquetNameToSize}
 import operators.logical.{Binning, Quantile, UniformSampleWithoutCI}
 import operators.physical.{DistinctSampleExec2, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
-import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, ReturnAnswer, SubqueryAlias}
+import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.{LogicalRDD, RDDScanExec, SparkPlan}
 import org.apache.spark.sql.types._
-import rules.physical.{SketchPhysicalTransformation, SketchTransformation}
+import rules.physical.ChangeSampleToScan
 
+import java.io.File
 import scala.collection.{Seq, mutable}
+import scala.util.Random
 
 object extraSQLOperators {
+
+  def executeAndStoreSketch(pp: SparkPlan): Unit = {
+    val queue = new mutable.Queue[SparkPlan]()
+    queue.enqueue(pp)
+    while (!queue.isEmpty) {
+      queue.dequeue() match {
+        case s: operators.physical.SketchExec
+          if (!sketchesMaterialized.contains(s.toString())) =>
+          val synopsisInfo = s.toString()
+          sketchesMaterialized.put(synopsisInfo, s.createSketch())
+          numberOfGeneratedSynopses += 1
+          lastUsedCounter += 1
+          lastUsedOfParquetSample.put(synopsisInfo, lastUsedCounter)
+        case a =>
+          a.children.foreach(x => queue.enqueue(x))
+      }
+    }
+  }
+
   def execQuantile(sparkSession: SparkSession, tempquery: String, table: String, quantileCol: String, quantilePart: Int
                    , confidence: Double, error: Double, seed: Long): String = {
     var quantileColAtt: AttributeReference = null
@@ -23,25 +45,23 @@ object extraSQLOperators {
       for (p <- scan.output.toList)
         if (p.name == quantileCol)
           quantileColAtt = p.asInstanceOf[AttributeReference]
-      sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation)
+      //sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation)
 
-      val optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0)
+      var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(1)
+      executeAndStoreSketch(optimizedPhysicalPlans)
+      executeAndStoreSample(sparkSession,optimizedPhysicalPlans)
+      optimizedPhysicalPlans=changeSynopsesWithScan(sparkSession,optimizedPhysicalPlans)
       optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.get(0) + ",\"value\":" + x.get(1) + "}," + "\n"))
       return out.dropRight(2) + "]"
     }
     val scan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
 
     val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
-    recursiveProcess(sparkSession.sqlContext.sql(tempQuery).queryExecution.analyzed, logicalPlanToTable)
+    //recursiveProcess(sparkSession.sqlContext.sql(tempQuery).queryExecution.analyzed, logicalPlanToTable)
     val sampleParquetToTable: mutable.HashMap[String, String] = new mutable.HashMap()
+    sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0)
     getTableNameToSampleParquet(sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0), logicalPlanToTable, sampleParquetToTable)
-    for (a <- sampleParquetToTable.toList) {
-      if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase)) {
-        tempQuery = tempQuery.replace(a._2.toUpperCase, a._1)
-        sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling)
-        sparkSession.experimental.extraOptimizations = Seq()
-      }
-    }
+
     var out = "["
     println(sparkSession.sqlContext.sql(tempQuery).queryExecution.executedPlan)
     val plan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
@@ -61,16 +81,19 @@ object extraSQLOperators {
 
   def execBinning(sparkSession: SparkSession, table: String, binningCol: String, binningPart: Int
                   , binningStart: Double, binningEnd: Double, confidence: Double, error: Double, seed: Long) = {
-    sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation)
+    //sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation)
     var out = "["
     val scan = sparkSession.sqlContext.sql("select * from " + table).queryExecution.optimizedPlan
     var binningColAtt: AttributeReference = null
     for (p <- scan.output.toList)
       if (p.name == binningCol)
         binningColAtt = p.asInstanceOf[AttributeReference]
-    val optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(Binning(binningColAtt, binningPart
+    var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(Binning(binningColAtt, binningPart
       , binningStart, binningEnd, confidence, error, seed, scan))).toList(0)
     //optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += (x.mkString(";") + "\n"))
+    executeAndStoreSketch(optimizedPhysicalPlans)
+    executeAndStoreSample(sparkSession,optimizedPhysicalPlans)
+    optimizedPhysicalPlans=changeSynopsesWithScan(sparkSession,optimizedPhysicalPlans)
     optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"start\":" + x.get(0) + ",\"end\":" + x.get(1) + ",\"count\":" + x.get(2) + "}," + "\n"))
     out.dropRight(2) + "]"
   }
@@ -84,7 +107,8 @@ object extraSQLOperators {
     val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
     recursiveProcess(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed, logicalPlanToTable)
     val sampleParquetToTable: mutable.HashMap[String, String] = new mutable.HashMap()
-    getTableNameToSampleParquet(optimizedPhysicalPlans, logicalPlanToTable, sampleParquetToTable)
+    //getTableNameToSampleParquet(optimizedPhysicalPlans, logicalPlanToTable, sampleParquetToTable)
+    executeAndStoreSketch(optimizedPhysicalPlans)
     for (a <- sampleParquetToTable.toList) {
       if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase)) {
         query_code = query_code.replace(a._2.toUpperCase, a._1)
@@ -232,6 +256,61 @@ object extraSQLOperators {
       case _ =>
         in.children.map(child => getTableNameToSampleParquet(child, logicalToTable, map))
     }
+  }
+
+  def changeSynopsesWithScan(sparkSession: SparkSession,plan: SparkPlan): SparkPlan = {
+    ruleOfSynopsesToScan(sparkSession).foldLeft(plan) { case (sp, rule) => rule.apply(sp) }
+  }
+
+  def ruleOfSynopsesToScan(sparkSession: SparkSession): Seq[Rule[SparkPlan]] = Seq(
+    ChangeSampleToScan(sparkSession)
+  )
+
+
+  def executeAndStoreSample(sparkSession: SparkSession,pp: SparkPlan): Unit = {
+    val queue = new mutable.Queue[SparkPlan]()
+    queue.enqueue(pp)
+    while (!queue.isEmpty) {
+      queue.dequeue() match {
+        case s: operators.physical.SampleExec =>
+          Random.setSeed(System.nanoTime())
+          val synopsisInfo = s.toString()
+          val name = "sample" + Random.alphanumeric.filter(_.isLetter).take(20).mkString.toLowerCase
+          if (s.output.size == 0) {
+            //  println("Errror: {" + s.toString() + "} output of sample is not defined because of projectList==[]")
+            return
+          }
+          try {
+            //  println(StructType(s.schema.toList.map(x=>new StructField("x",x.dataType,x.nullable,x.metadata))))
+            val dfOfSample = sparkSession.createDataFrame(sparkSession.sparkContext.parallelize(s.executeCollectPublic()), s.schema)
+            dfOfSample.write.format("parquet").save(pathToSaveSynopses + name + ".parquet");
+            dfOfSample.createOrReplaceTempView(name)
+            numberOfGeneratedSynopses += 1
+            warehouseParquetNameToSize.put(name.toLowerCase, folderSize(new File(pathToSaveSynopses + name + ".parquet")) /*view.rdd.count()*view.schema.map(_.dataType.defaultSize).reduce(_+_)*/)
+            ParquetNameToSynopses.put(name, synopsisInfo)
+            SynopsesToParquetName.put(synopsisInfo, name)
+            lastUsedCounter += 1
+            lastUsedOfParquetSample.put(name, lastUsedCounter)
+            parquetNameToHeader.put(name, getHeaderOfOutput(s.output))
+            //  println("stored: " + name + "," + s.toString())
+          }
+          catch {
+            case e: Exception =>
+              System.err.println("Errrror: " + name + "  " + s.toString())
+          }
+        case a =>
+          a.children.foreach(x => queue.enqueue(x))
+      }
+    }
+  }
+
+  def folderSize(directory: File): Long = {
+    var length: Long = 0
+    for (file <- directory.listFiles) {
+      if (file.isFile) length += file.length
+      else length += folderSize(file)
+    }
+    length / 100000
   }
 
   def recursiveProcess(in: LogicalPlan, map: mutable.HashMap[String, String]): Unit = {
