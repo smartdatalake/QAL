@@ -320,7 +320,7 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
 
   override def toString(): String =
     Seq("Distinct", getHeaderOfOutput(output), confidence, error, fraction, sampleSize
-      , functions.mkString(delimiterSynopsesColumnName), getAttNameOfExpression(groupingExpression).mkString(delimiterSynopsesColumnName))
+      , functions.mkString(delimiterSynopsesColumnName), getAccessedColsOfExpressions(groupingExpression).mkString(delimiterSynopsesColumnName))
       .mkString(delimiterSynopsisFileNameAtt)
 
   protected override def doExecute(): RDD[InternalRow] = {
@@ -427,9 +427,9 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
   override def toString(): String = {
     if (functions == null)
       return Seq("Universal", getHeaderOfOutput(output), confidence, error, fraction
-        , sampleSize, "null", getAttNameOfExpression(joinKey).mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
+        , sampleSize, "null", getAccessedColsOfExpressions(joinKey).mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
     Seq("Universal", getHeaderOfOutput(output), confidence, error, fraction
-      , functions.mkString(delimiterSynopsesColumnName), getAttNameOfExpression(joinKey).mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
+      , functions.mkString(delimiterSynopsesColumnName), getAccessedColsOfExpressions(joinKey).mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
   }
 
   override protected def doExecute(): RDD[InternalRow] = {

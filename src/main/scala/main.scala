@@ -37,7 +37,7 @@ import scala.util.Random
 object main {
 
   val sparkSession = SparkSession.builder
-    .appName("Taster")
+    .appName("AAQP")
     .master("local[*]")
     .getOrCreate();
   val tableCounter = new mutable.HashMap[String, Int]()
@@ -742,7 +742,7 @@ object main {
       if (sampleInfo(0).equals("Distinct") && getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
         && sampleInfo(2).toDouble >= confidence && sampleInfo(3).toDouble <= error
         //   && functions.map(_.toString()).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)
-        && getAttNameOfExpression(groupingExpressions).toSet.subsetOf(sampleInfo(7).split(delimiterSynopsesColumnName).toSet))
+        && getAccessedColsOfExpressions(groupingExpressions).toSet.subsetOf(sampleInfo(7).split(delimiterSynopsesColumnName).toSet))
         true else
         false
     case u@UniversalSampleExec2(functions, confidence, error, seed, joinKey, child) =>
@@ -750,7 +750,7 @@ object main {
       if (sampleInfo(0).equals("Universal") && getHeaderOfOutput(u.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
         && sampleInfo(2).toDouble >= confidence && sampleInfo(3).toDouble <= error
         //   && functions.map(_.toString()).toSet.subsetOf(sampleInfo(5).split(delimiterSynopsesColumnName).toSet)
-        && getAttNameOfExpression(joinKey).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet))
+        && getAccessedColsOfExpressions(joinKey).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet))
         true else
         false
     case u@UniformSampleExec2WithoutCI(seed, child) =>

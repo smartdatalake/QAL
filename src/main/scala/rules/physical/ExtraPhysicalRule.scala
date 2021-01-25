@@ -23,7 +23,7 @@ case class ChangeSampleToScan(sparkSession: SparkSession) extends Rule[SparkPlan
           if (sampleInfo(0).equals("Distinct") && getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
             && sampleInfo(2).toDouble >= confidence && sampleInfo(3).toDouble <= error
             //   && functions.map(_.toString()).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)
-            && getAttNameOfExpression(groupingExpressions).toSet.subsetOf(sampleInfo(7).split(delimiterSynopsesColumnName).toSet)) {
+            && getAccessedColsOfExpressions(groupingExpressions).toSet.subsetOf(sampleInfo(7).split(delimiterSynopsesColumnName).toSet)) {
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
             (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
             lastUsedCounter+=1
@@ -108,7 +108,7 @@ case class ChangeSampleToScan(sparkSession: SparkSession) extends Rule[SparkPlan
           if (sampleInfo(0).equals("Universal") && getHeaderOfOutput(d.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
             && sampleInfo(2).toDouble >= confidence && sampleInfo(3).toDouble <= error
             //   && functions.map(_.toString()).toSet.subsetOf(sampleInfo(5).split(delimiterSynopsesColumnName).toSet)
-            && getAttNameOfExpression(joinKey).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)) {
+            && getAccessedColsOfExpressions(joinKey).toSet.subsetOf(sampleInfo(6).split(delimiterSynopsesColumnName).toSet)) {
             val lRRD = sparkSession.sessionState.catalog.lookupRelation(new org.apache.spark.sql.catalyst.TableIdentifier
             (parquetNameToSynopses._1, None)).children(0).asInstanceOf[LogicalRDD]
             lastUsedCounter+=1
