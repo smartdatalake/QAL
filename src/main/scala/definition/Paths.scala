@@ -69,6 +69,12 @@ object  Paths {
   val parquetNameToHeader = new mutable.HashMap[String, String]()
   var JDBCRowLimiter: Long = 100000000
 
+  val ACCESSED_COL_MIN_FREQUENCY = 150
+  val GROUPBY_COL_MIN_FREQUENCY = 70
+  val JOIN_COL_MIN_FREQUENCY = 70
+  val MAX_NUMBER_OF_QUERY_REPETITION = 100000
+
+
   def getSizeOfAtt(in: Seq[Attribute]) = in.map(x => x.dataType.defaultSize).reduce(_ + _)
 
   def getHeaderOfOutput(output: Seq[Attribute]): String =
@@ -202,10 +208,11 @@ object  Paths {
     case a =>
       throw new Exception("Unknown Operator")
   }
-//todo fix joins
+
+  //todo fix joins
   def getJoinConditions(lp: LogicalPlan): Seq[String] = lp match {
-    case j@Filter( condition,child) =>
-        getJoinConditions(condition)
+    case j@Filter(condition, child) =>
+      getJoinConditions(condition)
     case l: LeafNode =>
       Seq()
     case a =>
@@ -218,17 +225,17 @@ object  Paths {
       getJoinConditions(left) ++ getJoinConditions(right)
     case Or(left, right) =>
       getJoinConditions(left) ++ getJoinConditions(right)
-    case e@EqualTo(left,right)=>
+    case e@EqualTo(left, right) =>
       if (e.left.find(_.isInstanceOf[AttributeReference]).isDefined && e.right.find(_.isInstanceOf[AttributeReference]).isDefined
-      && getAccessedColsOfExpression(e.left).size==1&&getAccessedColsOfExpression(e.right).size==1)
-        Seq(getAccessedColsOfExpression(e.left).mkString(",")+ "=" + getAccessedColsOfExpression(e.right).mkString(","))
+        && getAccessedColsOfExpression(e.left).size == 1 && getAccessedColsOfExpression(e.right).size == 1)
+        Seq(getAccessedColsOfExpression(e.left).mkString(",") + "=" + getAccessedColsOfExpression(e.right).mkString(","))
       else
         Seq()
- //   case e: BinaryComparison =>
-  //    if (e.left.find(_.isInstanceOf[AttributeReference]).isDefined && e.right.find(_.isInstanceOf[AttributeReference]).isDefined)
-  //      Seq(getAccessedColsOfExpression(e.left).mkString(",") + "=" + getAccessedColsOfExpression(e.right).mkString(","))
-  //    else
-   //     getJoinConditions(e.left) ++ getJoinConditions(e.right)
+    //   case e: BinaryComparison =>
+    //    if (e.left.find(_.isInstanceOf[AttributeReference]).isDefined && e.right.find(_.isInstanceOf[AttributeReference]).isDefined)
+    //      Seq(getAccessedColsOfExpression(e.left).mkString(",") + "=" + getAccessedColsOfExpression(e.right).mkString(","))
+    //    else
+    //     getJoinConditions(e.left) ++ getJoinConditions(e.right)
     case BinaryOperator(left, right) =>
       getJoinConditions(left) ++ getJoinConditions(right)
     case e: Expression =>
