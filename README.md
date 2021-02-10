@@ -1,1 +1,1 @@
-QAL
+QAL README is under preparation.
