@@ -1,0 +1,7 @@
+{
+"ProteusJDBC_URL" : "jdbc:avatica:remote:url=http://diascld32.iccluster.epfl.ch:18007;serialization=PROTOBUF",
+
+"ProteusUsername" : "sdlhshah",
+
+"ProteusPassword" : "Shah13563556"
+}
