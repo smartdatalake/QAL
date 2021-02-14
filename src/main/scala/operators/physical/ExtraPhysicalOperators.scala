@@ -19,13 +19,14 @@ import sketch.{DyadicRanges, MultiDyadicRanges}
 
 import scala.collection.Seq
 import scala.collection.mutable.ListBuffer
+
 case class RDDScanProteusExec(
-                        output: Seq[Attribute],
-                       // rdd: RDD[InternalRow],
-                             dir:String,
-                        name: String,
-                        override val outputPartitioning: Partitioning = UnknownPartitioning(0),
-                        override val outputOrdering: Seq[SortOrder] = Nil) extends LeafExecNode {
+                               output: Seq[Attribute],
+                               // rdd: RDD[InternalRow],
+                               dir: String,
+                               name: String,
+                               override val outputPartitioning: Partitioning = UnknownPartitioning(0),
+                               override val outputOrdering: Seq[SortOrder] = Nil) extends LeafExecNode {
 
 
   override val nodeName: String = s"Scan Proteus $name"
@@ -80,7 +81,7 @@ case class RDDScanProteusExec(
   }
 }
 
-case class QuantileSampleExec(quantileColAtt:AttributeReference,quantilePart:Int, child:SparkPlan) extends UnaryExecNode {
+case class QuantileSampleExec(quantileColAtt: AttributeReference, quantilePart: Int, child: SparkPlan) extends UnaryExecNode {
   override protected def doExecute(): RDD[InternalRow] = {
     val result = new ListBuffer[UnsafeRow]
     val size = child.execute().count()
@@ -109,12 +110,12 @@ case class QuantileSampleExec(quantileColAtt:AttributeReference,quantilePart:Int
     AttributeReference("index", IntegerType, false, Metadata.empty)(NamedExpression.newExprId, Seq.empty[String]))
 }
 
-case class BinningSampleExec(binningPart:Int, binningStart:Double, binningEnd:Double, output:Seq[Attribute], child:DyadicRangeExec)
+case class BinningSampleExec(binningPart: Int, binningStart: Double, binningEnd: Double, output: Seq[Attribute], child: DyadicRangeExec)
   extends UnaryExecNode {
   override protected def doExecute(): RDD[InternalRow] = ???
 }
 
-case class QuantileSketchExec(quantilePart:Int, output:Seq[Attribute], child:DyadicRangeExec)extends UnaryExecNode {
+case class QuantileSketchExec(quantilePart: Int, output: Seq[Attribute], child: DyadicRangeExec) extends UnaryExecNode {
   override protected def doExecute(): RDD[InternalRow] = {
     val dr = sketchesMaterialized.get(child.toString).get.asInstanceOf[DyadicRanges]
     val result = new ListBuffer[UnsafeRow]
@@ -132,13 +133,14 @@ case class QuantileSketchExec(quantilePart:Int, output:Seq[Attribute], child:Dya
     SparkContext.getOrCreate().parallelize(result)
   }
 }
-case class BinningSketchExec(binningPart:Int, binningStart:Double, binningEnd:Double, output:Seq[Attribute], child:DyadicRangeExec)
+
+case class BinningSketchExec(binningPart: Int, binningStart: Double, binningEnd: Double, output: Seq[Attribute], child: DyadicRangeExec)
   extends UnaryExecNode {
   override protected def doExecute(): RDD[InternalRow] = {
     val dr = sketchesMaterialized.get(child.toString).get.asInstanceOf[DyadicRanges]
     val result = new ListBuffer[UnsafeRow]
     val bucketSize = (binningEnd - binningStart) / binningPart
-    for (i <- 0 to binningPart-1) {
+    for (i <- 0 to binningPart - 1) {
       val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
       row.setDouble(0, i * bucketSize + binningStart)
       row.setDouble(1, (i + 1) * bucketSize + binningStart)
@@ -149,22 +151,41 @@ case class BinningSketchExec(binningPart:Int, binningStart:Double, binningEnd:Do
     SparkContext.getOrCreate().parallelize(result)
   }
 }
-  case class ExtAggregateExec(groupingExpressions: Seq[Expression]
-                              , aggregateExpressions: Seq[AggregateExpression]
-                              , children: Seq[SparkPlan]) extends MultiExecNode {
 
-
-    override def output: Seq[Attribute] = children.flatMap(x => x.output)
-
-    // override def inputRDDs(): Seq[RDD[InternalRow]] = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].inputRDDs())
-
-    //TODO what is doProduce???
-    //  override protected def doProduce(ctx: CodegenContext): String = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].produce(ctx, this)).reduce(_.toString+_.toString)
-
-    override protected def doExecute(): RDD[InternalRow] = {
-      children(0).asInstanceOf[SparkPlan].execute()
+case class BinningWithoutMaxMinSketchExec(binningPart:Int, output:Seq[Attribute], child:DyadicRangeExec)
+  extends UnaryExecNode {
+  override protected def doExecute(): RDD[InternalRow] = {
+    val dr = sketchesMaterialized.get(child.toString).get.asInstanceOf[DyadicRanges]
+    val result = new ListBuffer[UnsafeRow]
+    val bucketSize = (dr.getMax - dr.getMin) / binningPart
+    for (i <- 0 to binningPart-1) {
+      val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
+      row.setDouble(0, i * bucketSize + dr.getMin)
+      row.setDouble(1, (i + 1) * bucketSize + dr.getMin)
+      row.setInt(2, dr.get((i * bucketSize + dr.getMin).toInt, ((i + 1) * bucketSize + dr.getMin).toInt))
+      val x = UnsafeProjection.create(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
+      result += x(row)
     }
+    SparkContext.getOrCreate().parallelize(result)
   }
+}
+
+case class ExtAggregateExec(groupingExpressions: Seq[Expression]
+                            , aggregateExpressions: Seq[AggregateExpression]
+                            , children: Seq[SparkPlan]) extends MultiExecNode {
+
+
+  override def output: Seq[Attribute] = children.flatMap(x => x.output)
+
+  // override def inputRDDs(): Seq[RDD[InternalRow]] = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].inputRDDs())
+
+  //TODO what is doProduce???
+  //  override protected def doProduce(ctx: CodegenContext): String = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].produce(ctx, this)).reduce(_.toString+_.toString)
+
+  override protected def doExecute(): RDD[InternalRow] = {
+    children(0).asInstanceOf[SparkPlan].execute()
+  }
+}
 
 /*case class ExtAggregateExec(requiredChildDistributionExpressions: Option[Seq[Expression]],
 groupingExpressions: Seq[NamedExpression],

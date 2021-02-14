@@ -2,12 +2,14 @@ package sketch
 
 import scala.util.control.Breaks._
 
-class DyadicRanges( min:Int,max:Int,delta: Double, epsilon:Double,seed:Long) extends Sketch  {
+class DyadicRanges(min: Int, max: Int, delta: Double, epsilon: Double, seed: Long) extends Sketch {
 
   if (delta <= 0 || delta >= 1) throw new IllegalArgumentException
   if (epsilon <= 0 || delta >= 1) throw new IllegalArgumentException
   val MIN = min
   val MAX = max
+  var maxItem = 0
+  var minItem = max
   var total = 0
   var minV = 0
   val maxV = max - min + minV
@@ -25,6 +27,8 @@ class DyadicRanges( min:Int,max:Int,delta: Double, epsilon:Double,seed:Long) ext
     var bucketSize = MAX_BUCKET_SIZE
     total += increment
     var key = 0
+    if (keys > maxItem) maxItem = keys
+    if (keys < minItem) minItem = keys
     if (keys > MAX)
       key = maxV
     else if (keys < MIN)
@@ -99,4 +103,15 @@ class DyadicRanges( min:Int,max:Int,delta: Double, epsilon:Double,seed:Long) ext
     }
     out
   }
+
+
+  // todo: calculate them, not store them
+  def getMin: Int = {
+    minItem
+  }
+
+  def getMax: Int = {
+    maxItem
+  }
+
 }

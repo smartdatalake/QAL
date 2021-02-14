@@ -21,27 +21,28 @@ import sketch._
 abstract class SketchExec(DELTA: Double
                           , EPS: Double
                           , SEED: Long
-                          , sketchLogicalRDD:LogicalRDD) extends UnaryExecNode with CodegenSupport{
-  def createSketch():Sketch
+                          , sketchLogicalRDD: LogicalRDD) extends UnaryExecNode with CodegenSupport {
+  def createSketch(): Sketch
 }
+
 //todo fix toString
 case class CountMinSketchExec(DELTA: Double
                               , EPS: Double
                               , SEED: Long
-                              , resultExpressions:Seq[NamedExpression]
+                              , resultExpressions: Seq[NamedExpression]
                               , conditions: Seq[Expression]
-                              , sketchProjectAtt:NamedExpression
+                              , sketchProjectAtt: NamedExpression
                               //todo we should define scan based on other condition or resultExpression
-                              , sketchLogicalRDD:LogicalRDD) extends SketchExec (DELTA ,EPS,SEED,sketchLogicalRDD){
+                              , sketchLogicalRDD: LogicalRDD) extends SketchExec(DELTA, EPS, SEED, sketchLogicalRDD) {
   output: Seq[Attribute]
 
   override def inputRDDs(): Seq[RDD[InternalRow]] = child.asInstanceOf[CodegenSupport].inputRDDs()
 
-  override def toString(): String = Seq("CountMin" , DELTA , EPS , SEED , sketchProjectAtt.name).mkString(delimiterSynopsisFileNameAtt)
+  override def toString(): String = Seq("CountMin", DELTA, EPS, SEED, sketchProjectAtt.name).mkString(delimiterSynopsisFileNameAtt)
 
   override protected def doProduce(ctx: CodegenContext): String = child.asInstanceOf[CodegenSupport].produce(ctx, this)
 
-  override def createSketch()=child.execute().mapPartitionsWithIndex((index, rowIter) => {
+  override def createSketch() = child.execute().mapPartitionsWithIndex((index, rowIter) => {
     val countMinS = new CountMinSketch(DELTA, EPS, SEED)
     while (rowIter.hasNext)
       if (sketchProjectAtt.dataType.isInstanceOf[StringType])
@@ -105,16 +106,16 @@ case class CountMinSketchExec(DELTA: Double
   }
 }
 
-case class GroupCountMinSketchExec(targetColumn:AttributeReference
-                              , groupingExpression:NamedExpression
-                                  , condition:Seq[Seq[And]]
-                              , edge:AttributeReference
-                              , DELTA: Double
-                              , EPS: Double
-                              , SEED: Long
-                              , resultExpression:AggregateExpression
-                              //todo we should define scan based on other condition or resultExpression
-                              , sketchLogicalRDD:LogicalRDD) extends SketchExec (DELTA ,EPS,SEED,sketchLogicalRDD) {
+case class GroupCountMinSketchExec(targetColumn: AttributeReference
+                                   , groupingExpression: NamedExpression
+                                   , condition: Seq[Seq[And]]
+                                   , edge: AttributeReference
+                                   , DELTA: Double
+                                   , EPS: Double
+                                   , SEED: Long
+                                   , resultExpression: AggregateExpression
+                                   //todo we should define scan based on other condition or resultExpression
+                                   , sketchLogicalRDD: LogicalRDD) extends SketchExec(DELTA, EPS, SEED, sketchLogicalRDD) {
   output: Seq[Attribute]
 
   override def inputRDDs(): Seq[RDD[InternalRow]] = child.asInstanceOf[CodegenSupport].inputRDDs()
@@ -123,7 +124,7 @@ case class GroupCountMinSketchExec(targetColumn:AttributeReference
 
   override protected def doProduce(ctx: CodegenContext): String = child.asInstanceOf[CodegenSupport].produce(ctx, this)
 
-  override def createSketch()={
+  override def createSketch() = {
     if (targetColumn == null) {
       child.execute().mapPartitions(rowIter => {
         val cms = new CountMinSketchGroupBy(DELTA, EPS, SEED)
@@ -236,13 +237,13 @@ case class GroupCountMinSketchExec(targetColumn:AttributeReference
   }
 }
 
-case class GroupByMultiDyadicRangeExec(targetColumn:AttributeReference,groupingExpression:NamedExpression, confidence: Double , error: Double
-                                          , SEED: Long  , resultExpression:AggregateExpression, hyperRect: Seq[Seq[And]]
-                                          , edges:Seq[AttributeReference], sketchLogicalRDD:LogicalRDD)
+case class GroupByMultiDyadicRangeExec(targetColumn: AttributeReference, groupingExpression: NamedExpression, confidence: Double, error: Double
+                                       , SEED: Long, resultExpression: AggregateExpression, hyperRect: Seq[Seq[And]]
+                                       , edges: Seq[AttributeReference], sketchLogicalRDD: LogicalRDD)
 //todo we should define scan based on other condition or resultExpression
-  extends MultiDyadicRangeExec(targetColumn, confidence, error  , SEED  , resultExpression  , hyperRect  , edges , sketchLogicalRDD:LogicalRDD) {
+  extends MultiDyadicRangeExec(targetColumn, confidence, error, SEED, resultExpression, hyperRect, edges, sketchLogicalRDD: LogicalRDD) {
 
-  override def createSketch()= {
+  override def createSketch() = {
     if (targetColumn == null) {
       child.execute().mapPartitions(rowIter => {
         val multiDyadicRange = new MultiDyadicRanges(0, Integer.MAX_VALUE, l, edges.map(_.name), confidence, error, SEED)
@@ -274,7 +275,7 @@ case class GroupByMultiDyadicRangeExec(targetColumn:AttributeReference,groupingE
   override protected def doExecute(): RDD[InternalRow] = {
     //TODO add materilazioatiopn
     val edgeIndex = getGroupingAttEdgeIndex(resultExpression)
-    val MDR: MultiDyadicRanges =   sketchesMaterialized.get(toString).get.asInstanceOf[MultiDyadicRanges]
+    val MDR: MultiDyadicRanges = sketchesMaterialized.get(toString).get.asInstanceOf[MultiDyadicRanges]
     val ppp = new ListBuffer[UnsafeRow]
     for (p <- MDR.keys(edgeIndex)) {
       val x = UnsafeProjection.create(Array(groupingExpression.dataType, resultExpression.dataType))
@@ -308,11 +309,11 @@ case class GroupByMultiDyadicRangeExec(targetColumn:AttributeReference,groupingE
   }
 }
 
-case class NonGroupByMultiDyadicRangeExec(targetColumn:AttributeReference, confidence: Double , error: Double
-                                          , SEED: Long  , resultExpression:AggregateExpression, hyperRect: Seq[Seq[And]]
-                                          , edges:Seq[AttributeReference], sketchLogicalRDD:LogicalRDD)
+case class NonGroupByMultiDyadicRangeExec(targetColumn: AttributeReference, confidence: Double, error: Double
+                                          , SEED: Long, resultExpression: AggregateExpression, hyperRect: Seq[Seq[And]]
+                                          , edges: Seq[AttributeReference], sketchLogicalRDD: LogicalRDD)
 //todo we should define scan based on other condition or resultExpression
-  extends MultiDyadicRangeExec(targetColumn,  confidence, error  , SEED  , resultExpression  , hyperRect  , edges , sketchLogicalRDD:LogicalRDD) {
+  extends MultiDyadicRangeExec(targetColumn, confidence, error, SEED, resultExpression, hyperRect, edges, sketchLogicalRDD: LogicalRDD) {
   override def createSketch(): Sketch = {
     if (targetColumn == null) {
       child.execute().mapPartitions(rowIter => {
@@ -355,14 +356,14 @@ case class NonGroupByMultiDyadicRangeExec(targetColumn:AttributeReference, confi
 
 }
 
-abstract class MultiDyadicRangeExec(targetColumn:AttributeReference, confidence: Double
-                                          , error: Double
-                                          , SEED: Long
-                                          , resultExpression:AggregateExpression
-                                          , hyperRect: Seq[Seq[And]]
-                                          , edges:Seq[AttributeReference]
-                                          //todo we should define scan based on other condition or resultExpression
-                                          , sketchLogicalRDD:LogicalRDD) extends SketchExec (confidence ,error,SEED,sketchLogicalRDD) {
+abstract class MultiDyadicRangeExec(targetColumn: AttributeReference, confidence: Double
+                                    , error: Double
+                                    , SEED: Long
+                                    , resultExpression: AggregateExpression
+                                    , hyperRect: Seq[Seq[And]]
+                                    , edges: Seq[AttributeReference]
+                                    //todo we should define scan based on other condition or resultExpression
+                                    , sketchLogicalRDD: LogicalRDD) extends SketchExec(confidence, error, SEED, sketchLogicalRDD) {
 
   val l = edges.size
 
@@ -436,14 +437,14 @@ abstract class MultiDyadicRangeExec(targetColumn:AttributeReference, confidence:
   }
 }
 
-case class DyadicRangeExec(targetColumn:AttributeReference,DELTA: Double
+case class DyadicRangeExec(targetColumn: AttributeReference, DELTA: Double
                            , EPS: Double
                            , SEED: Long
-                           , resultExpression:AggregateExpression
+                           , resultExpression: AggregateExpression
                            , ranges: Seq[And]
-                           , edge:AttributeReference
+                           , edge: AttributeReference
                            //todo we should define scan based on other condition or resultExpression
-                           , sketchLogicalRDD:LogicalRDD) extends SketchExec (DELTA ,EPS,SEED,sketchLogicalRDD) {
+                           , sketchLogicalRDD: LogicalRDD) extends SketchExec(DELTA, EPS, SEED, sketchLogicalRDD) {
   output: Seq[Attribute]
 
   override def inputRDDs(): Seq[RDD[InternalRow]] = child.asInstanceOf[CodegenSupport].inputRDDs()

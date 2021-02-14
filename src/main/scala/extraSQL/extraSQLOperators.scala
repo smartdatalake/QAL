@@ -1,7 +1,7 @@
 package extraSQL
 
 import definition.Paths.{ParquetNameToSynopses, SynopsesToParquetName, getHeaderOfOutput, lastUsedCounter, lastUsedOfParquetSample, numberOfGeneratedSynopses, parquetNameToHeader, pathToSaveSynopses, sketchesMaterialized, warehouseParquetNameToSize}
-import operators.logical.{Binning, Quantile, UniformSampleWithoutCI}
+import operators.logical.{Binning, BinningWithoutMinMax, Quantile, UniformSampleWithoutCI}
 import operators.physical.{DistinctSampleExec2, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
@@ -49,8 +49,8 @@ object extraSQLOperators {
 
       var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(1)
       executeAndStoreSketch(optimizedPhysicalPlans)
-      executeAndStoreSample(sparkSession,optimizedPhysicalPlans)
-      optimizedPhysicalPlans=changeSynopsesWithScan(sparkSession,optimizedPhysicalPlans)
+      executeAndStoreSample(sparkSession, optimizedPhysicalPlans)
+      optimizedPhysicalPlans = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
       optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.get(0) + ",\"value\":" + x.get(1) + "}," + "\n"))
       return out.dropRight(2) + "]"
     }
@@ -88,12 +88,16 @@ object extraSQLOperators {
     for (p <- scan.output.toList)
       if (p.name == binningCol)
         binningColAtt = p.asInstanceOf[AttributeReference]
-    var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(Binning(binningColAtt, binningPart
-      , binningStart, binningEnd, confidence, error, seed, scan))).toList(0)
+    var optimizedPhysicalPlans = if (binningStart == 0 && binningEnd == 0)
+      sparkSession.sessionState.planner.plan(ReturnAnswer(BinningWithoutMinMax(binningColAtt, binningPart, confidence
+        , error, seed, scan))).toList(0)
+    else
+      sparkSession.sessionState.planner.plan(ReturnAnswer(Binning(binningColAtt, binningPart, binningStart, binningEnd
+        , confidence, error, seed, scan))).toList(0)
     //optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += (x.mkString(";") + "\n"))
     executeAndStoreSketch(optimizedPhysicalPlans)
-    executeAndStoreSample(sparkSession,optimizedPhysicalPlans)
-    optimizedPhysicalPlans=changeSynopsesWithScan(sparkSession,optimizedPhysicalPlans)
+    executeAndStoreSample(sparkSession, optimizedPhysicalPlans)
+    optimizedPhysicalPlans = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
     optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"start\":" + x.get(0) + ",\"end\":" + x.get(1) + ",\"count\":" + x.get(2) + "}," + "\n"))
     out.dropRight(2) + "]"
   }
@@ -258,7 +262,7 @@ object extraSQLOperators {
     }
   }
 
-  def changeSynopsesWithScan(sparkSession: SparkSession,plan: SparkPlan): SparkPlan = {
+  def changeSynopsesWithScan(sparkSession: SparkSession, plan: SparkPlan): SparkPlan = {
     ruleOfSynopsesToScan(sparkSession).foldLeft(plan) { case (sp, rule) => rule.apply(sp) }
   }
 
@@ -267,7 +271,7 @@ object extraSQLOperators {
   )
 
 
-  def executeAndStoreSample(sparkSession: SparkSession,pp: SparkPlan): Unit = {
+  def executeAndStoreSample(sparkSession: SparkSession, pp: SparkPlan): Unit = {
     val queue = new mutable.Queue[SparkPlan]()
     queue.enqueue(pp)
     while (!queue.isEmpty) {

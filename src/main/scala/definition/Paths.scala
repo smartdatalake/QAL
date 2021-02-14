@@ -1,4 +1,8 @@
 package definition
+
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.scala.DefaultScalaModule
+import com.fasterxml.jackson.module.scala.experimental.ScalaObjectMapper
 import org.apache.hadoop.hive.metastore.parser.ExpressionTree.LeafNode
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
@@ -9,8 +13,9 @@ import org.apache.spark.sql.execution.LogicalRDD
 import org.apache.spark.sql.sources
 
 import scala.collection.{Seq, mutable}
+import scala.io.Source
 
-object  Paths {
+object Paths {
   //val parentDir = "/home/hamid/TASTER/"
   var parentDir = "/home/hamid/QAL/"
   var pathToTableCSV = parentDir + "data_csv/"
@@ -73,6 +78,10 @@ object  Paths {
   val GROUPBY_COL_MIN_FREQUENCY = 70
   val JOIN_COL_MIN_FREQUENCY = 70
   val MAX_NUMBER_OF_QUERY_REPETITION = 100000
+
+  var Proteus_URL = ""
+  var Proteus_username = ""
+  var Proteus_pass = ""
 
 
   def getSizeOfAtt(in: Seq[Attribute]) = in.map(x => x.dataType.defaultSize).reduce(_ + _)
@@ -249,6 +258,16 @@ object  Paths {
       Seq()
     case a =>
       a.children.flatMap(x => getGroupByKeys(x))
+  }
+
+  def readProteusConfiguration() = {
+    val json = Source.fromFile("conf.txt")
+    val mapper = new ObjectMapper() with ScalaObjectMapper
+    mapper.registerModule(DefaultScalaModule)
+    val parsedJson = mapper.readValue[Map[String, String]](json.reader())
+    Paths.Proteus_URL = parsedJson.getOrElse("ProteusJDBC_URL", "")
+    Paths.Proteus_username = parsedJson.getOrElse("ProteusUsername", "")
+    Paths.Proteus_pass = parsedJson.getOrElse("ProteusPassword", "")
   }
 
 }

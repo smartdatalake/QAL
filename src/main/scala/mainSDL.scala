@@ -1,10 +1,10 @@
-import definition.Paths.{JDBCRowLimiter, LRUorWindowBased, REST, counterNumberOfRowGenerated, fraction, lastUsedCounter, lastUsedOfParquetSample, maxSpace, numberOfGeneratedSynopses, outputOfQuery, parentDir, pathToCIStats, pathToQueryLog, pathToSaveSynopses, pathToSketches, pathToTableCSV, pathToTableParquet, seed, sketchesMaterialized, start, tableName, timeForSampleConstruction, timeForSubQueryExecution, timeForUpdateWarehouse, timeTotal, windowSize}
-import definition.{ProteusJDBC, TableDefs}
+import definition.Paths._
+import definition.ProteusJDBC
 import extraSQL.{extraRulesWithoutSampling, extraSQLOperators}
-import main.{analyzeArgs, changeSynopsesWithScan, countReusedSample, executeAndStoreSample, flush, folderSize, getAggSubQueries, loadTables, mapRDDScanRowCNT, numberOfExecutedSubQuery, prepareForExecution, queryWorkload, readRDDScanRowCNT, setRules, sparkSession, tableCounter, tokenizeQuery, updateAttributeName, updateWareHouseLRU, updateWarehouse}
+import main._
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, ReturnAnswer}
-import org.apache.spark.sql.execution.{LogicalRDD, RDDScanExec, SparkPlan}
+import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, ReturnAnswer, SubqueryAlias}
+import org.apache.spark.sql.execution.{LogicalRDD, SparkPlan}
 import rules.logical.{ApproximateInjector, pushFilterUp}
 import rules.physical.{SampleTransformation, SketchPhysicalTransformation}
 
@@ -19,7 +19,7 @@ import scala.util.control.Breaks.{break, breakable}
 object mainSDL {
   val sparkSession = SparkSession.builder
     .appName("QAL")
-   // .master("local[*]")
+    .master("local[*]")
     .getOrCreate();
   val tableCounter = new mutable.HashMap[String, Int]()
   var mapRDDScanRowCNT: mutable.HashMap[String, Long] = new mutable.HashMap[String, Long]()
@@ -36,10 +36,11 @@ object mainSDL {
     sparkSession.conf.set("spark.sql.codegen.wholeStage", false); // disable codegen
     sparkSession.conf.set("spark.sql.crossJoin.enabled", true)
 
+    readProteusConfiguration()
     analyzeArgs(args);
     loadTables()
     mapRDDScanRowCNT = readRDDScanRowCNT(pathToTableParquet)
-    sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling,SketchPhysicalTransformation,  SampleTransformation);
+    sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
 
 
     if (REST) {
@@ -50,38 +51,62 @@ object mainSDL {
         val clientSocket = server.accept()
         val input = clientSocket.getInputStream()
         val output = clientSocket.getOutputStream()
-        var query = java.net.URLDecoder.decode(new BufferedReader(new InputStreamReader(input)).readLine, StandardCharsets.UTF_8.name)
+        val inputHTTP = java.net.URLDecoder.decode(new BufferedReader(new InputStreamReader(input)).readLine, StandardCharsets.UTF_8.name).toLowerCase
+        var out = ""
+        var responseDocument: Array[Byte] = null
+        var responseHeader: Array[Byte] = null
         breakable {
-          if (!query.contains("GET /QAL?query=")) {
-            val error = "{'status':404,'message':\"Wrong REST request!!!\"}"
-            val responseDocument = (error).getBytes("UTF-8")
-            val responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
-            output.write(responseHeader)
-            output.write(responseDocument)
-            input.close()
-            output.close()
-            break()
-          }
-          query = query.replace("GET /QAL?query=", "").replace(" HTTP/1.1", "")
-          try {
-            queryLog += (query)
-            val past = if (queryLog.size >= windowSize) queryLog.slice(queryLog.size - windowSize, queryLog.size - 1) else queryLog.slice(0, queryLog.size - 1)
-            val out = executeQuery(query, past.toList)
-            val responseDocument = (out).getBytes("UTF-8")
-            val responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+          if (inputHTTP.contains("get /changeproteus?")) {
+            if (inputHTTP.contains("url") && inputHTTP.contains("username") && inputHTTP.contains("pass")) {
+              val params = inputHTTP.split('?')(1).replace(" http/1.1", "").split('&').map(_.split('='))
+              Proteus_URL = params.find(x => x(0).contains("url")).get(1)
+              Proteus_username = params.find(x => x(0).contains("username")).get(1)
+              Proteus_pass = params.find(x => x(0).contains("pass")).get(1)
+              out = "{'status':404,'message':\"Proteus credential is changed.\"}"
+              responseDocument = (out).getBytes("UTF-8")
+              responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+            }
+            else {
+              out = "{'status':404,'message':\"Missing fields, update skipped.\"}"
+              responseDocument = (out).getBytes("UTF-8")
+              responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+            }
             output.write(responseHeader)
             output.write(responseDocument)
             input.close()
             output.close()
           }
-          catch {
-            case e: Exception =>
-              val responseDocument = ("{'status':404,'message':\"" + e.getMessage + "\"}").getBytes("UTF-8")
-              val responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+          else if (inputHTTP.contains("get /qal?query=")) {
+            val query = inputHTTP.replace("get /qal?query=", "").replace(" http/1.1", "")
+            try {
+              queryLog += (query)
+              val past = if (queryLog.size >= windowSize) queryLog.slice(queryLog.size - windowSize, queryLog.size - 1) else queryLog.slice(0, queryLog.size - 1)
+              out = executeQuery(query, past.toList)
+              responseDocument = (out).getBytes("UTF-8")
+              responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
               output.write(responseHeader)
               output.write(responseDocument)
               input.close()
               output.close()
+            }
+            catch {
+              case e: Exception =>
+                responseDocument = ("{'status':404,'message':\"" + e.getMessage + "\"}").getBytes("UTF-8")
+                responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+                output.write(responseHeader)
+                output.write(responseDocument)
+                input.close()
+                output.close()
+            }
+          }
+          else {
+            out = "{'status':404,'message':\"Invalid REST request!!!\"}"
+            responseDocument = (out).getBytes("UTF-8")
+            responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+            output.write(responseHeader)
+            output.write(responseDocument)
+            input.close()
+            output.close()
           }
         }
       }
@@ -104,26 +129,26 @@ object mainSDL {
     sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed), new pushFilterUp);
 
     if (quantileCol != "") {
-      sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling,SketchPhysicalTransformation,  SampleTransformation);
-      if(!sparkSession.sqlContext.tableNames().contains(table.toLowerCase))
+      sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
+      if (!sparkSession.sqlContext.tableNames().contains(table.toLowerCase))
         getAndCreateTableFromProteus(table.toLowerCase)
       outString = extraSQLOperators.execQuantile(sparkSession, tempQuery, table, quantileCol, quantilePart, confidence, error, seed)
     } else if (binningCol != "") {
-      sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling,SketchPhysicalTransformation,  SampleTransformation);
+      sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
       if (!sparkSession.sqlContext.tableNames().contains(table.toLowerCase))
         getAndCreateTableFromProteus(table.toLowerCase)
       outString = extraSQLOperators.execBinning(sparkSession, table, binningCol, binningPart, binningStart, binningEnd, confidence, error, seed)
-    }else if (dataProfileTable != "") {
-      sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling,SketchPhysicalTransformation,  SampleTransformation);
+    } else if (dataProfileTable != "") {
+      sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
       if (!sparkSession.sqlContext.tableNames().contains(table.toLowerCase))
         getAndCreateTableFromProteus(dataProfileTable.toLowerCase)
       outString = extraSQLOperators.execDataProfile(sparkSession, dataProfileTable, confidence, error, seed)
-    }else {
+    } else {
       try {
-        sparkSession.experimental.extraStrategies = Seq(  SampleTransformation);
+        sparkSession.experimental.extraStrategies = Seq(SampleTransformation);
         val analyzed = sparkSession.sqlContext.sql(query_code).queryExecution.analyzed
         checkAndCreateTable(analyzed)
-        //choose the best approximate physical plan and create related synopses, presently, the lowest costed plan
+        //choose the best approximate physical plan and create related synopses, presently, the lowest-cost plan
         //////////////////////////////////////////////////////////////////////////////////////////////////////////
         val checkpointForSampleConstruction = System.nanoTime()
         updateAttributeName(analyzed, new mutable.HashMap[String, Int]())
@@ -159,6 +184,16 @@ object mainSDL {
     outString
   }
 
+  def updateAttributeName(lp: LogicalPlan, tableFrequency: mutable.HashMap[String, Int]): Unit = lp match {
+    case SubqueryAlias(identifier, child@LogicalRDD(output, rdd, outputPartitioning, outputOrdering, isStreaming)) =>
+      val att = output.toList
+      tableFrequency.put(identifier.identifier, tableFrequency.getOrElse(identifier.identifier, 0) + 1)
+      for (i <- 0 to output.size - 1)
+        tableName.put(att(i).toAttribute.toString().toLowerCase, identifier.identifier + "_" + tableFrequency.get(identifier.identifier).get)
+    case a =>
+      a.children.foreach(x => updateAttributeName(x, tableFrequency))
+  }
+
   def executeAndStoreSketch(pp: SparkPlan): Unit = {
     val queue = new mutable.Queue[SparkPlan]()
     queue.enqueue(pp)
@@ -189,7 +224,7 @@ object mainSDL {
     maxSpace = args(1).toInt * 10
     windowSize = args(2).toInt
     REST = args(3).toBoolean
-    JDBCRowLimiter=args(4).toLong
+    JDBCRowLimiter = args(4).toLong
     parentDir = args(5)
     pathToTableCSV = parentDir + "data_csv/"
     pathToSketches = parentDir + "materializedSketches/"

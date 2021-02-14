@@ -93,7 +93,7 @@ object main {
           //  println("cheapest plan before execution preparation:")
           // println(costOfPhysicalPlan(0)._1)
 
-          //choose the best approximate physical plan and create related synopses, presently, the lowest costed plan
+          //choose the best approximate physical plan and create related synopses, presently, the lowest-cost plan
           //////////////////////////////////////////////////////////////////////////////////////////////////////////
           val checkpointForSampleConstruction = System.nanoTime()
           updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
@@ -147,6 +147,14 @@ object main {
       + "," + numberOfGeneratedSynopses + "," + numberOfSynopsesReuse + "," + numberOfExecutedSubQuery + ","
       + counterNumberOfRowGenerated)
     flush()
+  }
+
+  def findBestPPWithFeatureVectors(lp: LogicalPlan)={
+
+  }
+
+  def updateWarehouseWithFeatureVectors()={
+
   }
 
   def executeAndStoreSketch(pp: SparkPlan): Unit = {
@@ -819,10 +827,18 @@ object main {
       }
       else if (tokens(i).compareToIgnoreCase("binning(") == 0 || tokens(i).compareToIgnoreCase("binning") == 0 || tokens(i).contains("binning(")) {
         val att = query.substring(query.indexOf("(") + 1, query.indexOf(")")).split(",")
-        binningCol = att(0)
-        binningStart = att(1).toDouble
-        binningEnd = att(2).toDouble
-        binningPart = att(3).toInt
+        if(att.length==4) {
+          binningCol = att(0)
+          binningStart = att(1).toDouble
+          binningEnd = att(2).toDouble
+          binningPart = att(3).toInt
+        }
+        else {
+          binningCol = att(0)
+          binningPart = att(1).toInt
+          binningStart = 0
+          binningEnd = 0
+        }
       }
       else if (tokens(i).equalsIgnoreCase("from"))
         table = tokens(i + 1)

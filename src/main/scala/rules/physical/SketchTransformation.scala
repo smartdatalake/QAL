@@ -1,7 +1,7 @@
 package rules.physical
 
-import operators.logical.{ApproximateAggregate, Binning, Quantile}
-import operators.physical.{BinningSketchExec, CountMinSketchExec, DyadicRangeExec, ExtAggregateExec, QuantileSketchExec}
+import operators.logical.{ApproximateAggregate, Binning, BinningWithoutMinMax, Quantile}
+import operators.physical.{BinningSketchExec, BinningWithoutMaxMinSketchExec, CountMinSketchExec, DyadicRangeExec, ExtAggregateExec, QuantileSketchExec}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Count}
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, AttributeReference, BinaryComparison, BinaryOperator, EqualNullSafe, EqualTo, EquivalentExpressions, Expression, GreaterThan, GreaterThanOrEqual, IsNotNull, IsNull, LessThan, LessThanOrEqual, Literal, NamedExpression, Or, PredicateHelper, PythonUDF, UnaryExpression}
 import org.apache.spark.sql.catalyst.planning.PhysicalAggregation
@@ -242,6 +242,8 @@ object SketchPhysicalTransformation extends Strategy {
       Seq(QuantileSketchExec(quantilePart, q.output, DyadicRangeExec(null, confidence, error, seed, null, null, quantileCol, child)))
     case b@Binning(binningCol, binningPart, binningStart, binningEnd, confidence, error, seed, child: LogicalRDD) =>
       Seq(BinningSketchExec(binningPart, binningStart, binningEnd, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child)))
+    case b@BinningWithoutMinMax(binningCol, binningPart, confidence, error, seed, child: LogicalRDD) =>
+      Seq(BinningWithoutMaxMinSketchExec(binningPart, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child)))
     case ApproximatePhysicalAggregation(confidence, error, seed, hasJoin, groupingExpressions
     , functionsWithDistinct: Seq[AggregateExpression], functionsWithoutDistinct: Seq[AggregateExpression]
     , resultExpressions, logicalRDD, child)
