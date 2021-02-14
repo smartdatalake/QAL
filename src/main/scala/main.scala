@@ -140,7 +140,7 @@ object main {
         ParquetNameToSynopses.foreach(println)
         SynopsesToParquetName.foreach(println)
         parquetNameToHeader.foreach(println)*/
-    println(LRUorWindowBased.toString + "," + maxSpace + "," + windowSize + "," + fraction
+    println(LRUorWindowBased.toString + "," + maxSpace + "," + windowSize + "," + fractionInitialize
       + "," + (System.nanoTime() - timeTotal) / 1000000000 + "," + timeForSubQueryExecution / 1000000000
       + "," + timeForSampleConstruction / 1000000000 + ","
       + timeForUpdateWarehouse / 1000000000 + "," + numberOfRemovedSynopses
@@ -933,7 +933,7 @@ object main {
     val sf = args(1)
     val hdfsOrLocal = args(2)
     val inputDataFormat=args(3)
-    fraction = args(4).toDouble
+    fractionInitialize = args(4).toDouble
     maxSpace = args(5).toInt * 10
     windowSize = args(6).toInt
     LRUorWindowBased = args(7).toBoolean

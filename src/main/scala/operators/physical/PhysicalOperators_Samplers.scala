@@ -82,7 +82,7 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
   } else {
     2
   }*/
-  val fraction = Paths.fraction
+  val fraction = Paths.fractionInitialize
   val fractionStep = 0.001
   val zValue = Array.fill[Double](100)(0.0)
   zValue(99) = 2.58

@@ -36,8 +36,7 @@ object mainSDL {
     sparkSession.conf.set("spark.sql.codegen.wholeStage", false); // disable codegen
     sparkSession.conf.set("spark.sql.crossJoin.enabled", true)
 
-    readProteusConfiguration()
-    analyzeArgs(args);
+    readSDLConfiguration()
     loadTables()
     mapRDDScanRowCNT = readRDDScanRowCNT(pathToTableParquet)
     sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
@@ -217,21 +216,6 @@ object mainSDL {
       val view = sparkSession.read.parquet(table.getAbsolutePath);
       sparkSession.sqlContext.createDataFrame(view.rdd, view.schema).createOrReplaceTempView(table.getName.split("\\.")(0).toLowerCase);
     })
-  }
-
-  def analyzeArgs(args: Array[String]) = {
-    fraction = args(0).toDouble
-    maxSpace = args(1).toInt * 10
-    windowSize = args(2).toInt
-    REST = args(3).toBoolean
-    JDBCRowLimiter = args(4).toLong
-    parentDir = args(5)
-    pathToTableCSV = parentDir + "data_csv/"
-    pathToSketches = parentDir + "materializedSketches/"
-    pathToQueryLog = parentDir + "queryLog"
-    pathToTableParquet = parentDir + "data_parquet/"
-    pathToSaveSynopses = parentDir + "materializedSynopsis/"
-    pathToCIStats = parentDir + "CIstats/"
   }
 
   def checkAndCreateTable(lp: LogicalPlan): Unit = lp match {

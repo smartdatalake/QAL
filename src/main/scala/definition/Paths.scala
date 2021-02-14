@@ -42,7 +42,7 @@ object Paths {
   val testWindowSize = Array(50)
   var maxSpace = 1000
   var windowSize = 5
-  var fraction = 1.0
+  var fractionInitialize = 1.0
   val start = 0
   val testSize = 350
   var numberOfSynopsesReuse = 0
@@ -260,14 +260,34 @@ object Paths {
       a.children.flatMap(x => getGroupByKeys(x))
   }
 
-  def readProteusConfiguration() = {
-    val json = Source.fromFile("conf.txt")
+  def readSDLConfiguration() = {
+    val json = Source.fromFile("QALconf.txt")
     val mapper = new ObjectMapper() with ScalaObjectMapper
     mapper.registerModule(DefaultScalaModule)
     val parsedJson = mapper.readValue[Map[String, String]](json.reader())
+    fractionInitialize = parsedJson.getOrElse("fractionInitialize", "").toDouble
+    maxSpace = parsedJson.getOrElse("maxSpace", "").toInt
+    windowSize = parsedJson.getOrElse("windowSize", "").toInt
+    REST = parsedJson.getOrElse("REST", "").toBoolean
+    JDBCRowLimiter = parsedJson.getOrElse("JDBCRowLimiter", "").toInt
+    parentDir = parsedJson.getOrElse("parentDir", "")
     Paths.Proteus_URL = parsedJson.getOrElse("ProteusJDBC_URL", "")
     Paths.Proteus_username = parsedJson.getOrElse("ProteusUsername", "")
     Paths.Proteus_pass = parsedJson.getOrElse("ProteusPassword", "")
+    import java.nio.file.Files
+    import java.nio.file.Paths
+    pathToTableCSV = parentDir + "data_csv/"
+    pathToSketches = parentDir + "materializedSketches/"
+    pathToQueryLog = parentDir + "queryLog"
+    pathToTableParquet = parentDir + "data_parquet/"
+    pathToSaveSynopses = parentDir + "materializedSynopsis/"
+    pathToCIStats = parentDir + "CIstats/"
+    Files.createDirectories(Paths.get(pathToTableCSV))
+    Files.createDirectories(Paths.get(pathToSketches))
+    Files.createDirectories(Paths.get(pathToQueryLog))
+    Files.createDirectories(Paths.get(pathToTableParquet))
+    Files.createDirectories(Paths.get(pathToSaveSynopses))
+    Files.createDirectories(Paths.get(pathToCIStats))
   }
 
 }

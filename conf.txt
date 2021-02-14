@@ -1,0 +1,19 @@
+{
+    "fractionInitialize" : 0.1,
+
+    "maxSpace" : 100,
+
+    "windowSize" : 20,
+
+    "REST" : true,
+
+    "JDBCRowLimiter" : 1000,
+
+    "parentDir" : "/home/hamid/QAL/",
+
+    "ProteusJDBC_URL" : "URL",
+
+    "ProteusUsername" : "username",
+
+    "ProteusPassword" : "pass"
+}
