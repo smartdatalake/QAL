@@ -14,6 +14,7 @@ import org.apache.spark.sql.{Strategy, execution}
 import scala.collection.Seq
 import scala.collection.mutable.ListBuffer
 import scala.util.control.Breaks._
+
 object SketchTransformation extends Strategy with PredicateHelper {
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
     /*    case cms@CountMinSketch(delta, eps, seed, child, outputExpression, condition) =>
@@ -22,6 +23,7 @@ object SketchTransformation extends Strategy with PredicateHelper {
   }
 
 }
+
 object SketchPhysicalTransformation extends Strategy {
   def getConditions(expression: Expression): String = {
     val t = expression
@@ -666,6 +668,7 @@ object SketchPhysicalTransformation extends Strategy {
     }
   }
 }
+
 object ApproximatePhysicalAggregation {
   type ReturnType =
     (Double, Double, Long, Boolean, Seq[NamedExpression], Seq[Expression], Seq[Expression], Seq[NamedExpression], LogicalRDD, LogicalPlan)

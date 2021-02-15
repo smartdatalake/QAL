@@ -34,6 +34,7 @@ object tempMain {
 
   }
 }
+
 /*val rdd=sparkSession.sparkContext.textFile("/home/hamid/BRS10K.csv")
 rdd.saveAsObjectFile("/home/hamid/BRS10Ktemp.csv")
 val rdd2=SparkContext.getOrCreate().objectFile[String]("/home/hamid/BRS10Ktemp.csv")

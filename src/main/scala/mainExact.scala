@@ -267,14 +267,6 @@ object mainExact {
 }*/
 
 
-
-
-
-
-
-
-
-
 import definition.Paths.{counterForQueryRow, counterNumberOfRowGenerated, outputOfQuery, seed, start, testSize}
 import main.{analyzeArgs, getAggSubQueries, loadTables, numberOfExecutedSubQuery, queryWorkload, sparkSession, tokenizeQuery}
 import org.apache.spark.sql.SparkSession
@@ -305,13 +297,13 @@ object mainExact {
       if (i > start + testSize)
         throw new Exception(outputOfQuery + "executed " + numberOfExecutedSubQuery + " queries in " + (System.nanoTime() - timeTotal) / 1000000000 + ", number of generated rows: " + counterNumberOfRowGenerated)
       val query = queries(i)
-     // println(query)
+      // println(query)
       val t = System.nanoTime()
       val (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
       , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
       val subQueries = getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
       outputOfQuery = ""
-      counterForQueryRow=0
+      counterForQueryRow = 0
       for (subQuery <- subQueries) {
         val logicalPlans = subQuery.map(x => sparkSession.sessionState.optimizer.execute(x))
         val physicalPlans = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x))).map(prepareForExecution).toList(0)
@@ -321,7 +313,7 @@ object mainExact {
         })
         numberOfExecutedSubQuery += 1
       }
-     // println(counterForQueryRow + "," + (System.nanoTime() - t) / 1000000000)
+      // println(counterForQueryRow + "," + (System.nanoTime() - t) / 1000000000)
     }
   }
 

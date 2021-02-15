@@ -22,7 +22,7 @@ import org.apache.spark.unsafe.types.UTF8String
 
 import scala.collection.mutable.ListBuffer
 
-case class PProject(projectList: Seq[NamedExpression], child: SparkPlan)  extends UnaryExecNode {
+case class PProject(projectList: Seq[NamedExpression], child: SparkPlan) extends UnaryExecNode {
 
   override def output: Seq[Attribute] = projectList.map(_.toAttribute)
 

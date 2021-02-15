@@ -88,6 +88,14 @@ case class QuantileSampleExec(quantileColAtt: AttributeReference, quantilePart: 
     val list = child.execute.map(x => x.getInt(0)).sortBy(x => x).collect().toList
     list.takeRight(1000)
     var percent = 100 / quantilePart.toDouble
+    if (list.size == 0) {
+      val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
+      row.setDouble(0, 0)
+      row.setInt(1, 0)
+      val x = UnsafeProjection.create(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
+      result += x(row)
+      return SparkContext.getOrCreate().parallelize(result)
+    }
     for (i <- 0 until list.size by list.size / quantilePart) {
       val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
       row.setDouble(0, percent)
@@ -152,13 +160,13 @@ case class BinningSketchExec(binningPart: Int, binningStart: Double, binningEnd:
   }
 }
 
-case class BinningWithoutMaxMinSketchExec(binningPart:Int, output:Seq[Attribute], child:DyadicRangeExec)
+case class BinningWithoutMaxMinSketchExec(binningPart: Int, output: Seq[Attribute], child: DyadicRangeExec)
   extends UnaryExecNode {
   override protected def doExecute(): RDD[InternalRow] = {
     val dr = sketchesMaterialized.get(child.toString).get.asInstanceOf[DyadicRanges]
     val result = new ListBuffer[UnsafeRow]
     val bucketSize = (dr.getMax - dr.getMin) / binningPart
-    for (i <- 0 to binningPart-1) {
+    for (i <- 0 to binningPart - 1) {
       val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
       row.setDouble(0, i * bucketSize + dr.getMin)
       row.setDouble(1, (i + 1) * bucketSize + dr.getMin)

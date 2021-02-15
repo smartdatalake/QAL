@@ -9,7 +9,7 @@ import org.apache.spark.sql.types.DoubleType
 import scala.collection.mutable.ListBuffer
 import scala.util.control.Breaks._
 
-class MultiDyadicRanges(min:Int, max:Int, l:Int,edges:Seq[String], confidence: Double, epsilon:Double, seed:Long) extends Sketch{
+class MultiDyadicRanges(min: Int, max: Int, l: Int, edges: Seq[String], confidence: Double, epsilon: Double, seed: Long) extends Sketch {
 
   if (confidence <= 0 || confidence >= 1) throw new IllegalArgumentException
   if (epsilon <= 0 || epsilon >= 1) throw new IllegalArgumentException

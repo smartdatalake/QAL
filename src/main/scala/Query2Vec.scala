@@ -7,13 +7,13 @@ import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 import java.util
-import org.apache.spark.sql.types.{ StructField, StructType}
+import org.apache.spark.sql.types.{StructField, StructType}
 import definition.Paths._
 
 object Query2Vec {
   var pathToQueryLog = ""
-  val resultPath= "/home/hamid/vectorsIP_"+Paths.ACCESSED_COL_MIN_FREQUENCY+"_"+Paths.MAX_NUMBER_OF_QUERY_REPETITION
-  val resultInfoPath= resultPath+"Info"
+  val resultPath = "/home/hamid/vectorsIP_" + Paths.ACCESSED_COL_MIN_FREQUENCY + "_" + Paths.MAX_NUMBER_OF_QUERY_REPETITION
+  val resultInfoPath = resultPath + "Info"
   val logSchema = StructType(Array(
     StructField("yy", IntegerType, false),
     StructField("mm", IntegerType, false),
@@ -54,7 +54,7 @@ object Query2Vec {
     val queryLog = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "true")
       .option("inferSchema", "true").option("delimiter", ";").option("nullValue", "null").schema(logSchema).load(pathToQueryLog)
     val queriesStatement = queryLog.filter("statement is not null").filter(row => row.getAs[String]("statement").trim.length > 0)
-      .sort("clientIP","yy", "mm", "dd", "hh", "mi", "ss", "seq").select("statement").map(_.getAs[String](0)).collect()
+      .sort("clientIP", "yy", "mm", "dd", "hh", "mi", "ss", "seq").select("statement").map(_.getAs[String](0)).collect()
     for (q <- queriesStatement) {
       val query = q.replace("set showplan_all on go ", "").replace("select , count(1)", "select count(1)").replace("/* specobjid and qso only */ ", " ").replace("/* specobjid and qso only */ ", " ").replace(" font=\"\"", "").replace(" select count(*)", " ").replace("photoz2", "photoz").replace("as avg_dec, from", "as avg_dec from").replace("== SQL ==", "")
       totalCNT += 1

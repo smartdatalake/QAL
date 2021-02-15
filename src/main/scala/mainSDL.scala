@@ -44,7 +44,7 @@ object mainSDL {
 
     if (REST) {
       val queryLog = new ListBuffer[String]()
-      val server = new ServerSocket(4545)
+      val server = new ServerSocket(REST_PORT)
       println("Server initialized:")
       while (true) {
         val clientSocket = server.accept()
@@ -55,13 +55,21 @@ object mainSDL {
         var responseDocument: Array[Byte] = null
         var responseHeader: Array[Byte] = null
         breakable {
-          if (inputHTTP.contains("get /changeproteus?")) {
+          if (inputHTTP.contains("get /removeproteus?")) {
+            Proteus_URL = ""
+            Proteus_username = ""
+            Proteus_pass = ""
+            out = "{'status':200,'message':\"Proteus credential is removed.\"}"
+            responseDocument = (out).getBytes("UTF-8")
+            responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+          }
+          else if (inputHTTP.contains("get /changeproteus?")) {
             if (inputHTTP.contains("url") && inputHTTP.contains("username") && inputHTTP.contains("pass")) {
               val params = inputHTTP.split('?')(1).replace(" http/1.1", "").split('&').map(_.split('='))
               Proteus_URL = params.find(x => x(0).contains("url")).get(1)
               Proteus_username = params.find(x => x(0).contains("username")).get(1)
               Proteus_pass = params.find(x => x(0).contains("pass")).get(1)
-              out = "{'status':404,'message':\"Proteus credential is changed.\"}"
+              out = "{'status':200,'message':\"Proteus credential is changed.\"}"
               responseDocument = (out).getBytes("UTF-8")
               responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
             }
@@ -77,7 +85,7 @@ object mainSDL {
           }
           else if (inputHTTP.contains("get /qal?query=")) {
             val query = inputHTTP.replace("get /qal?query=", "").replace(" http/1.1", "")
-            try {
+          //  try {
               queryLog += (query)
               val past = if (queryLog.size >= windowSize) queryLog.slice(queryLog.size - windowSize, queryLog.size - 1) else queryLog.slice(0, queryLog.size - 1)
               out = executeQuery(query, past.toList)
@@ -87,7 +95,7 @@ object mainSDL {
               output.write(responseDocument)
               input.close()
               output.close()
-            }
+        /*    }
             catch {
               case e: Exception =>
                 responseDocument = ("{'status':404,'message':\"" + e.getMessage + "\"}").getBytes("UTF-8")
@@ -96,7 +104,7 @@ object mainSDL {
                 output.write(responseDocument)
                 input.close()
                 output.close()
-            }
+            }*/
           }
           else {
             out = "{'status':404,'message':\"Invalid REST request!!!\"}"

@@ -8,15 +8,15 @@ import org.apache.spark.sql.catalyst.expressions.Literal
 /**
  * CountMinSketch
  *
-
+ *
  *
  * Example
- *   10**-7, 0.005, 40
+ * 10**-7, 0.005, 40
  *
  */
 
 
- class CountMinSketchGroupBy(confidence: Double, epsilon:Double, seed:Long) extends Sketch  {
+class CountMinSketchGroupBy(confidence: Double, epsilon: Double, seed: Long) extends Sketch {
   var CMS = new CountMinSketch(confidence, epsilon, seed)
   var set: scala.collection.mutable.Set[String] = scala.collection.mutable.Set()
   var MAXSIZE = 1000

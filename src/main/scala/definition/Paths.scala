@@ -7,10 +7,9 @@ import org.apache.hadoop.hive.metastore.parser.ExpressionTree.LeafNode
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, ComplexTypeMergingExpression, NamedExpression, UnaryExpression, _}
-import sketch.Sketch
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, Join, LogicalPlan, Project, Sort, SubqueryAlias}
 import org.apache.spark.sql.execution.LogicalRDD
-import org.apache.spark.sql.sources
+import sketch.Sketch
 
 import scala.collection.{Seq, mutable}
 import scala.io.Source
@@ -82,6 +81,7 @@ object Paths {
   var Proteus_URL = ""
   var Proteus_username = ""
   var Proteus_pass = ""
+  var REST_PORT = 4545
 
 
   def getSizeOfAtt(in: Seq[Attribute]) = in.map(x => x.dataType.defaultSize).reduce(_ + _)
@@ -274,20 +274,19 @@ object Paths {
     Paths.Proteus_URL = parsedJson.getOrElse("ProteusJDBC_URL", "")
     Paths.Proteus_username = parsedJson.getOrElse("ProteusUsername", "")
     Paths.Proteus_pass = parsedJson.getOrElse("ProteusPassword", "")
-    import java.nio.file.Files
-    import java.nio.file.Paths
+    Paths.REST_PORT = parsedJson.getOrElse("port", "").toInt
     pathToTableCSV = parentDir + "data_csv/"
     pathToSketches = parentDir + "materializedSketches/"
     pathToQueryLog = parentDir + "queryLog"
     pathToTableParquet = parentDir + "data_parquet/"
     pathToSaveSynopses = parentDir + "materializedSynopsis/"
     pathToCIStats = parentDir + "CIstats/"
-    Files.createDirectories(Paths.get(pathToTableCSV))
-    Files.createDirectories(Paths.get(pathToSketches))
-    Files.createDirectories(Paths.get(pathToQueryLog))
-    Files.createDirectories(Paths.get(pathToTableParquet))
-    Files.createDirectories(Paths.get(pathToSaveSynopses))
-    Files.createDirectories(Paths.get(pathToCIStats))
+    /*  pathToTableCSV.toFile.createIfNotExists()
+      pathToSketches.toFile.createIfNotExists()
+      pathToQueryLog.toFile.createIfNotExists()
+      pathToTableParquet.toFile.createIfNotExists()
+      pathToSaveSynopses.toFile.createIfNotExists()
+      pathToCIStats.toFile.createIfNotExists()*/
   }
 
 }

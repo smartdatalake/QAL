@@ -1,4 +1,5 @@
 //-XX:+UnlockCommercialFeatures -XX:+FlightRecorder -XX:StartFlightRecording=duration=30s,filename=QAL_recording.jfr
+
 import java.io.{BufferedReader, File, FileOutputStream, FileReader, FilenameFilter, PrintWriter}
 import java.net.ServerSocket
 import definition.{Paths, TableDefs}
@@ -34,6 +35,7 @@ import org.apache.spark.sql.functions.col
 import org.apache.spark.util.Utils
 
 import scala.util.Random
+
 object main {
 
   val sparkSession = SparkSession.builder
@@ -149,11 +151,11 @@ object main {
     flush()
   }
 
-  def findBestPPWithFeatureVectors(lp: LogicalPlan)={
+  def findBestPPWithFeatureVectors(lp: LogicalPlan) = {
 
   }
 
-  def updateWarehouseWithFeatureVectors()={
+  def updateWarehouseWithFeatureVectors() = {
 
   }
 
@@ -205,7 +207,7 @@ object main {
           }
           catch {
             case e: Exception =>
-             System.err.println("Errrror: " + name + "  " + s.toString())
+              System.err.println("Errrror: " + name + "  " + s.toString())
           }
         case a =>
           a.children.foreach(x => queue.enqueue(x))
@@ -260,6 +262,7 @@ object main {
       }
     }
   }
+
   def updateWarehouse(future: Seq[String]): Unit = {
     val warehouseSynopsesToSize = warehouseParquetNameToSize.map(x => (ParquetNameToSynopses(x._1), x._2))
     if (warehouseSynopsesToSize.size == 0 || warehouseSynopsesToSize.reduce((a, b) => (null, a._2 + b._2))._2 <= maxSpace)
@@ -827,7 +830,7 @@ object main {
       }
       else if (tokens(i).compareToIgnoreCase("binning(") == 0 || tokens(i).compareToIgnoreCase("binning") == 0 || tokens(i).contains("binning(")) {
         val att = query.substring(query.indexOf("(") + 1, query.indexOf(")")).split(",")
-        if(att.length==4) {
+        if (att.length == 4) {
           binningCol = att(0)
           binningStart = att(1).toDouble
           binningEnd = att(2).toDouble
@@ -909,7 +912,7 @@ object main {
           }
         }
       }
-     // println("number of queries: " + temp.size)
+      // println("number of queries: " + temp.size)
       temp.toList
     }
 
@@ -925,14 +928,14 @@ object main {
   }
 
   def setRules(): (Seq[Rule[LogicalPlan]], Seq[Strategy]) = {
-      (Seq(), Seq(/*SketchPhysicalTransformation,*/  SampleTransformation))
+    (Seq(), Seq(/*SketchPhysicalTransformation,*/ SampleTransformation))
   }
 
-  def analyzeArgs(args: Array[String]): (String,  String,String) = {
+  def analyzeArgs(args: Array[String]): (String, String, String) = {
     val inputDataBenchmark = args(0);
     val sf = args(1)
     val hdfsOrLocal = args(2)
-    val inputDataFormat=args(3)
+    val inputDataFormat = args(3)
     fractionInitialize = args(4).toDouble
     maxSpace = args(5).toInt * 10
     windowSize = args(6).toInt
@@ -1179,9 +1182,6 @@ catch {
 //   }
 
 
-
-
-
 /*   val filename = schemaFolderPath + folder(i).getName
      var schemaString = ""
      for (line <- Source.fromFile(filename).getLines)
@@ -1301,7 +1301,6 @@ if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase)) {
   }
   rowString.dropRight(1) + "}"
 }).mkString(",\n") + "]"*/
-
 
 
 /*

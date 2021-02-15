@@ -1,4 +1,5 @@
 package rules.physical
+
 import definition.Paths._
 import operators.logical.{ApproximateAggregate, DistinctSample, Quantile, UniformSample, UniformSampleWithoutCI, UniversalSample, UniversalSampleWithoutKey}
 import operators.physical.{DistinctSampleExec2, QuantileSampleExec, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
@@ -11,6 +12,7 @@ import org.apache.spark.sql.catalyst.plans.logical.{Filter, Join, LeafNode, Logi
 
 import scala.collection.{Seq, mutable}
 import scala.io.Source
+
 class p() {
   def apply(plan: SparkPlan): Seq[SparkPlan] = plan match {
     case s@UniformSampleExec2(functions: Seq[AggregateExpression], confidence: Double, error: Double,
@@ -19,6 +21,7 @@ class p() {
       Seq(child)
   }
 }
+
 object SampleTransformation extends Strategy {
 
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
@@ -202,6 +205,7 @@ object SampleTransformation extends Strategy {
   }
 
 }
+
 object ApproximatePhysicalAggregationSample {
   type ReturnType =
     (Double, Double, Long, Boolean, Seq[NamedExpression], Seq[Expression], Seq[Expression], Seq[NamedExpression], LogicalPlan)
@@ -439,12 +443,6 @@ object ApproximatePhysicalAggregationSample {
 *
 *
 * */
-
-
-
-
-
-
 
 
 /*    case ApproximatePhysicalAggregationSample(confidence, error, seed, hasJoin, groupingExpressions, functionsWithDistinct: Seq[AggregateExpression]

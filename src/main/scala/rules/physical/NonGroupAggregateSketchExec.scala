@@ -13,8 +13,8 @@ import scala.collection.Seq
 import scala.collection.mutable.ListBuffer
 import org.apache.spark.unsafe.types.UTF8String
 
-case class GroupAggregateSketchExec(confidence:Double, error:Double, seed:Long, groupingExpressions:Seq[NamedExpression], resultExpressions:Seq[NamedExpression]
-                                    , functionsWithoutDistinct:Seq[AggregateExpression], hyperRects:Seq[Seq[And]], logicalScan:LogicalRDD)
+case class GroupAggregateSketchExec(confidence: Double, error: Double, seed: Long, groupingExpressions: Seq[NamedExpression], resultExpressions: Seq[NamedExpression]
+                                    , functionsWithoutDistinct: Seq[AggregateExpression], hyperRects: Seq[Seq[And]], logicalScan: LogicalRDD)
   extends AggreagateSketchExec(confidence, error, seed, resultExpressions, functionsWithoutDistinct, hyperRects, logicalScan) {
   var countChildIndex = 0
   val edges = groupingExpressions.map(_.asInstanceOf[AttributeReference])
@@ -118,8 +118,9 @@ case class GroupAggregateSketchExec(confidence:Double, error:Double, seed:Long, 
     sketches
   }
 }
-case class NonGroupAggregateSketchExec(confidence:Double, error:Double, seed:Long, resultExpressions:Seq[NamedExpression]
-                                       , functionsWithoutDistinct:Seq[AggregateExpression], hyperRects:Seq[Seq[And]], logicalScan:LogicalRDD)
+
+case class NonGroupAggregateSketchExec(confidence: Double, error: Double, seed: Long, resultExpressions: Seq[NamedExpression]
+                                       , functionsWithoutDistinct: Seq[AggregateExpression], hyperRects: Seq[Seq[And]], logicalScan: LogicalRDD)
   extends AggreagateSketchExec(confidence, error, seed, resultExpressions, functionsWithoutDistinct, hyperRects, logicalScan) {
   val edges = getDimension(hyperRects)
   /*    for (aggExpression <- functionsWithoutDistinct) {
@@ -233,9 +234,9 @@ ProjectExec
   }
 }
 
-abstract class AggreagateSketchExec(confidence:Double, error:Double, seed:Long, resultExpressions:Seq[NamedExpression]
-                                    , functionsWithoutDistinct:Seq[AggregateExpression], hyperRects:Seq[Seq[And]]
-                                    , logicalScan:LogicalRDD) extends MultiExecNode {
+abstract class AggreagateSketchExec(confidence: Double, error: Double, seed: Long, resultExpressions: Seq[NamedExpression]
+                                    , functionsWithoutDistinct: Seq[AggregateExpression], hyperRects: Seq[Seq[And]]
+                                    , logicalScan: LogicalRDD) extends MultiExecNode {
 
   //todo fix
   val IsPointQuery = true //if(hyperRects != null) hyperRects.forall(x=>x.forall(y=>y.left.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value
@@ -277,7 +278,7 @@ abstract class AggreagateSketchExec(confidence:Double, error:Double, seed:Long, 
   }
 }
 
-case class ScaleAggregateSampleExec(confidence:Double, error:Double, seed:Long, fraction:Double,resultsExpression:Seq[NamedExpression], child: SparkPlan)
+case class ScaleAggregateSampleExec(confidence: Double, error: Double, seed: Long, fraction: Double, resultsExpression: Seq[NamedExpression], child: SparkPlan)
   extends UnaryExecNode {
 
   override def output: Seq[Attribute] = child.output

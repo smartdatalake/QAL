@@ -20,9 +20,9 @@ import definition.Paths
 import definition.Paths._
 import org.apache.spark.SparkEnv
 
-abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpression],child: SparkPlan) extends UnaryExecNode with CodegenSupport {
+abstract class SampleExec(confidence: Double, error: Double, func: Seq[AggregateExpression], child: SparkPlan) extends UnaryExecNode with CodegenSupport {
 
-  def saveAsCSV(out: RDD[InternalRow], synopsis: String):Unit = {
+  def saveAsCSV(out: RDD[InternalRow], synopsis: String): Unit = {
     return Unit
     println("the next command is saving the sample")
     val time = System.nanoTime()
@@ -41,7 +41,7 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
     }).saveAsTextFile(pathToSaveSynopses + name /*+SparkEnv.get.executorId*/)
     ParquetNameToSynopses.put(name, synopsis)
     SynopsesToParquetName.put(synopsis, name)
-    lastUsedCounter+=1
+    lastUsedCounter += 1
     lastUsedOfParquetSample.put(name, lastUsedCounter)
     parquetNameToHeader.put(name, getHeaderOfOutput(output))
     timeForSampleConstruction += (System.nanoTime() - time) / 1000000000
@@ -219,16 +219,16 @@ abstract class SampleExec(confidence:Double,error:Double,func:Seq[AggregateExpre
   }*/
 }
 
-case class UniformSampleExec2WithoutCI(seed:Long,child:SparkPlan) extends SampleExec(0,0,null,child) {
+case class UniformSampleExec2WithoutCI(seed: Long, child: SparkPlan) extends SampleExec(0, 0, null, child) {
   override protected def doExecute(): RDD[InternalRow] = {
-   child.execute().sample(false, fraction, seed) /*.mapPartitionsWithIndexInternal { (index, iter) =>
+    child.execute().sample(false, fraction, seed) /*.mapPartitionsWithIndexInternal { (index, iter) =>
         if(index<3)
           iter
         else
           Iterator()}*/
     // sampleSize = out.count()
     //saveAsCSV(out, toString())
-  //  out
+    //  out
   }
 
   override def toString(): String =
@@ -237,9 +237,9 @@ case class UniformSampleExec2WithoutCI(seed:Long,child:SparkPlan) extends Sample
 
 }
 
-case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Double, error:Double,
+case class UniformSampleExec2(functions: Seq[AggregateExpression], confidence: Double, error: Double,
                               seed: Long,
-                              child: SparkPlan) extends SampleExec(confidence ,error,functions ,child ) {
+                              child: SparkPlan) extends SampleExec(confidence, error, functions, child) {
   override def toString(): String =
     Seq("Uniform", getHeaderOfOutput(output), confidence, error, fraction, sampleSize
       , functions.mkString(delimiterSynopsesColumnName)).mkString(delimiterSynopsisFileNameAtt)
@@ -303,9 +303,9 @@ case class UniformSampleExec2(functions:Seq[AggregateExpression], confidence:Dou
   }
 }
 
-case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Double,error:Double,seed: Long,
-                               groupingExpression:Seq[NamedExpression],
-                               child: SparkPlan) extends SampleExec( confidence,error, functions,child: SparkPlan) {
+case class DistinctSampleExec2(functions: Seq[AggregateExpression], confidence: Double, error: Double, seed: Long,
+                               groupingExpression: Seq[NamedExpression],
+                               child: SparkPlan) extends SampleExec(confidence, error, functions, child: SparkPlan) {
   val r = scala.util.Random
   r.setSeed(seed)
   val groupValues: Seq[(Int, DataType)] = getAttOfExpression(groupingExpression).map(x => {
@@ -407,9 +407,9 @@ case class DistinctSampleExec2(functions:Seq[AggregateExpression],confidence:Dou
   }
 }
 
-case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:Double, error:Double, seed: Long
-                                ,joinKey:Seq[AttributeReference],child: SparkPlan) extends SampleExec(confidence
-  ,error,functions,child: SparkPlan) {
+case class UniversalSampleExec2(functions: Seq[AggregateExpression], confidence: Double, error: Double, seed: Long
+                                , joinKey: Seq[AttributeReference], child: SparkPlan) extends SampleExec(confidence
+  , error, functions, child: SparkPlan) {
   val rand = new Random(seed)
   val a = math.abs(rand.nextInt())
   val b = math.abs(rand.nextInt())
@@ -513,6 +513,7 @@ case class UniversalSampleExec2(functions:Seq[AggregateExpression], confidence:D
     //   out
   }
 }
+
 /*
 *     val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for (i <- 0 to folder.size - 1) {

@@ -1,7 +1,7 @@
 package definition
 
-class QueryEncoding(val accessedCols:Seq[String],val  groupByKeys:Seq[String],  val joinKeys:Seq[String],val query:String
-                    , val date:String) {
+class QueryEncoding(val accessedCols: Seq[String], val groupByKeys: Seq[String], val joinKeys: Seq[String], val query: String
+                    , val date: String) {
 
   override def toString: String = ("query:" + query + "\ndate:" + date + "\naccessedCols:" + accessedCols.toString()
     + "\ngroupByKeys:" + groupByKeys.toString() + "\njoinKeys:" + joinKeys.toString())

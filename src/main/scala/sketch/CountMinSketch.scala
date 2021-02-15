@@ -16,12 +16,12 @@ import scala.util.Random
  *
  *
  * Example
- *   10**-7, 0.005, 40
+ * 10**-7, 0.005, 40
  *
  */
 
 
- class CountMinSketch(confidence: Double, epsilon:Double, seed:Long) extends Sketch  {
+class CountMinSketch(confidence: Double, epsilon: Double, seed: Long) extends Sketch {
 
   if (confidence <= 0 || confidence >= 1) throw new IllegalArgumentException
   if (epsilon <= 0 || epsilon >= 1) throw new IllegalArgumentException
@@ -180,6 +180,7 @@ import scala.util.Random
     value.asInstanceOf[CountMinSketch]
   }
 }
+
 /*package matt.Sketch
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectInputStream, ObjectOutputStream}
