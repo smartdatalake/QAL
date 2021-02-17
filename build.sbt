@@ -10,8 +10,8 @@ organization := "TUE"
 val algebraVersion = "0.6.0"
 val javaEwahVersion = "1.1.4"
 val sparkVersion = "2.4.3"
-unmanagedResourceDirectories in Compile += {baseDirectory.value / "lib"}
-unmanagedJars in Compile += file("avatica-1.13.0.jar")
+
+unmanagedJars in Compile += file("lib/avatica-1.13.0.jar")
 
 libraryDependencies += "org.scala-lang" % "scala-library" % "2.11.12"
 
@@ -35,7 +35,6 @@ libraryDependencies ++= Seq(
   "com.twitter" % "algebird-core_2.11" % "0.12.3",
   "org.apache.bahir" %% "spark-streaming-twitter" % "2.0.2",
   "com.github.nscala-time" %% "nscala-time" % "1.8.0",
-  "com.sparkjava" % "spark-core" % "2.9.1",
   "com.sparkjava" % "spark-core" % "2.9.1"
 )
 

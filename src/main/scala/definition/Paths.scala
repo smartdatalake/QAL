@@ -43,7 +43,7 @@ object Paths {
   var windowSize = 5
   var fractionInitialize = 1.0
   val start = 0
-  val testSize = 350
+  val testSize = 35000
   var numberOfSynopsesReuse = 0
   var numberOfGeneratedSynopses = 0
   val minNumOfOcc = 15

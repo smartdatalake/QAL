@@ -35,43 +35,26 @@ object extraSQLOperators {
     }
   }
 
-  def execQuantile(sparkSession: SparkSession, tempquery: String, table: String, quantileCol: String, quantilePart: Int
+  def execQuantile(sparkSession: SparkSession, tempQuery: String, table: String, quantileCol: String, quantilePart: Int
                    , confidence: Double, error: Double, seed: Long): String = {
     var quantileColAtt: AttributeReference = null
-    var tempQuery = tempquery
-    if (tempQuery.size < 40) {
-      var out = "["
-      val scan = sparkSession.sqlContext.sql("select * from " + table).queryExecution.optimizedPlan
-      for (p <- scan.output.toList)
-        if (p.name == quantileCol)
-          quantileColAtt = p.asInstanceOf[AttributeReference]
-      //sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation)
-
-      var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(1)
-      executeAndStoreSketch(optimizedPhysicalPlans)
-      executeAndStoreSample(sparkSession, optimizedPhysicalPlans)
-      optimizedPhysicalPlans = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
-      optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.get(0) + ",\"value\":" + x.get(1) + "}," + "\n"))
-      return out.dropRight(2) + "]"
-    }
     val scan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
-
-    val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
-    //recursiveProcess(sparkSession.sqlContext.sql(tempQuery).queryExecution.analyzed, logicalPlanToTable)
-    val sampleParquetToTable: mutable.HashMap[String, String] = new mutable.HashMap()
-    sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0)
-    getTableNameToSampleParquet(sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0), logicalPlanToTable, sampleParquetToTable)
-
-    var out = "["
-    println(sparkSession.sqlContext.sql(tempQuery).queryExecution.executedPlan)
-    val plan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
-    for (p <- plan.output.toList)
+    for (p <- scan.output.toList)
       if (p.name == quantileCol)
         quantileColAtt = p.asInstanceOf[AttributeReference]
-    val optimizedPhysicalPlans = sparkSession.sessionState.executePlan(Quantile(quantileColAtt, quantilePart, confidence
-      , error, seed, plan)).executedPlan
-    //optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += (x.mkString(";") + "\n"))
-    println(optimizedPhysicalPlans)
+    var out = "["
+
+   // if (tempQuery.size < 40) {
+      var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0)
+      executeAndStoreSketch(optimizedPhysicalPlans)
+      executeAndStoreSample(sparkSession, optimizedPhysicalPlans)
+     // optimizedPhysicalPlans = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
+     // optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.get(0) + ",\"value\":" + x.get(1) + "}," + "\n"))
+     // return out.dropRight(2) + "]"
+   // }
+   // val plan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
+   // val optimizedPhysicalPlans = sparkSession.sessionState.executePlan(Quantile(quantileColAtt, quantilePart, confidence
+   //   , error, seed, plan)).executedPlan
 
     optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.getDouble(0) + ",\"value\":" + x.getInt(1) + "}," + "\n"))
     out = out.dropRight(2) + "]"

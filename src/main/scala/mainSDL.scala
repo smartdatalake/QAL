@@ -1,5 +1,5 @@
 import definition.Paths._
-import definition.ProteusJDBC
+import definition.{Paths}
 import extraSQL.{extraRulesWithoutSampling, extraSQLOperators}
 import main._
 import org.apache.spark.sql.SparkSession
@@ -8,9 +8,10 @@ import org.apache.spark.sql.execution.{LogicalRDD, SparkPlan}
 import rules.logical.{ApproximateInjector, pushFilterUp}
 import rules.physical.{SampleTransformation, SketchPhysicalTransformation}
 
-import java.io.{BufferedReader, File, InputStreamReader}
+import java.io.{BufferedReader, BufferedWriter, File, FileWriter, InputStreamReader}
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
+import java.sql.{Connection, DriverManager, ResultSet, ResultSetMetaData, Statement}
 import scala.collection.mutable.ListBuffer
 import scala.collection.{Seq, mutable}
 import scala.io.Source
@@ -19,13 +20,10 @@ import scala.util.control.Breaks.{break, breakable}
 object mainSDL {
   val sparkSession = SparkSession.builder
     .appName("QAL")
-    .master("local[*]")
+   // .master("local[*]")
     .getOrCreate();
   val tableCounter = new mutable.HashMap[String, Int]()
   var mapRDDScanRowCNT: mutable.HashMap[String, Long] = new mutable.HashMap[String, Long]()
-  var numberOfExecutedSubQuery = 0
-  val threshold = 1000
-  var numberOfRemovedSynopses = 0;
 
   def main(args: Array[String]): Unit = {
     SparkSession.setActiveSession(sparkSession)
@@ -85,26 +83,26 @@ object mainSDL {
           }
           else if (inputHTTP.contains("get /qal?query=")) {
             val query = inputHTTP.replace("get /qal?query=", "").replace(" http/1.1", "")
-          //  try {
-              queryLog += (query)
-              val past = if (queryLog.size >= windowSize) queryLog.slice(queryLog.size - windowSize, queryLog.size - 1) else queryLog.slice(0, queryLog.size - 1)
-              out = executeQuery(query, past.toList)
-              responseDocument = (out).getBytes("UTF-8")
-              responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
-              output.write(responseHeader)
-              output.write(responseDocument)
-              input.close()
-              output.close()
-        /*    }
-            catch {
-              case e: Exception =>
-                responseDocument = ("{'status':404,'message':\"" + e.getMessage + "\"}").getBytes("UTF-8")
-                responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
-                output.write(responseHeader)
-                output.write(responseDocument)
-                input.close()
-                output.close()
-            }*/
+            //  try {
+            queryLog += (query)
+            val past = if (queryLog.size >= windowSize) queryLog.slice(queryLog.size - windowSize, queryLog.size - 1) else queryLog.slice(0, queryLog.size - 1)
+            out = executeQuery(query, past.toList)
+            responseDocument = (out).getBytes("UTF-8")
+            responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+            output.write(responseHeader)
+            output.write(responseDocument)
+            input.close()
+            output.close()
+            /*    }
+                catch {
+                  case e: Exception =>
+                    responseDocument = ("{'status':404,'message':\"" + e.getMessage + "\"}").getBytes("UTF-8")
+                    responseHeader = ("HTTP/1.1 404 FAIL\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
+                    output.write(responseHeader)
+                    output.write(responseDocument)
+                    input.close()
+                    output.close()
+                }*/
           }
           else {
             out = "{'status':404,'message':\"Invalid REST request!!!\"}"
@@ -137,24 +135,25 @@ object mainSDL {
 
     if (quantileCol != "") {
       sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
-      if (!sparkSession.sqlContext.tableNames().contains(table.toLowerCase))
-        getAndCreateTableFromProteus(table.toLowerCase)
+      val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(tempQuery)
+      checkAndCreateTable(logicalPlan)
       outString = extraSQLOperators.execQuantile(sparkSession, tempQuery, table, quantileCol, quantilePart, confidence, error, seed)
     } else if (binningCol != "") {
       sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
-      if (!sparkSession.sqlContext.tableNames().contains(table.toLowerCase))
-        getAndCreateTableFromProteus(table.toLowerCase)
+      val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(tempQuery)
+      checkAndCreateTable(logicalPlan)
       outString = extraSQLOperators.execBinning(sparkSession, table, binningCol, binningPart, binningStart, binningEnd, confidence, error, seed)
     } else if (dataProfileTable != "") {
       sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
-      if (!sparkSession.sqlContext.tableNames().contains(table.toLowerCase))
-        getAndCreateTableFromProteus(dataProfileTable.toLowerCase)
+      val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(tempQuery)
+      checkAndCreateTable(logicalPlan)
       outString = extraSQLOperators.execDataProfile(sparkSession, dataProfileTable, confidence, error, seed)
     } else {
       try {
         sparkSession.experimental.extraStrategies = Seq(SampleTransformation);
+        val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(tempQuery)
+        checkAndCreateTable(logicalPlan)
         val analyzed = sparkSession.sqlContext.sql(query_code).queryExecution.analyzed
-        checkAndCreateTable(analyzed)
         //choose the best approximate physical plan and create related synopses, presently, the lowest-cost plan
         //////////////////////////////////////////////////////////////////////////////////////////////////////////
         val checkpointForSampleConstruction = System.nanoTime()
@@ -228,7 +227,12 @@ object mainSDL {
 
   def checkAndCreateTable(lp: LogicalPlan): Unit = lp match {
     case node@org.apache.spark.sql.catalyst.analysis.UnresolvedRelation(table) =>
-      getAndCreateTableFromProteus(table.table.toLowerCase)
+      val listOfFiles = new File(pathToTableParquet).listFiles
+      var getTable = true
+      for (j <- 0 until listOfFiles.length)
+        if (listOfFiles(j).getName == table.table.toLowerCase + ".parquet") getTable = false
+      if (getTable)
+        getAndCreateTableFromProteus(table.table.toLowerCase)
     case t =>
       t.children.foreach(child => checkAndCreateTable(child))
   }
@@ -243,7 +247,37 @@ object mainSDL {
   }
 
   def getAndCreateTableFromProteus(tableName: String): Unit = {
-    ProteusJDBC.getCSVfromProteus(tableName, pathToTableCSV)
+    System.out.println("fetching table from proteus " + tableName)
+    Class.forName("org.apache.calcite.avatica.remote.Driver")
+    val connection: Connection = DriverManager.getConnection(Paths.Proteus_URL, Paths.Proteus_username, Paths.Proteus_pass)
+    val statement = connection.createStatement()
+    val rs = statement.executeQuery("select * from " + tableName + " limit " + Paths.JDBCRowLimiter)
+    val rsmd = rs.getMetaData
+
+    var header = ""
+    for (i <- 1 to rsmd.getColumnCount) {
+      header += rsmd.getColumnName(i) + ","
+    }
+    header = header.substring(0, header.length - 1)
+    val numberOfColumns = rsmd.getColumnCount
+    val writer = new BufferedWriter(new FileWriter(pathToTableCSV + "/" + tableName + ".csv"))
+    writer.write(header + "\n")
+    while ( {
+      rs.next
+    }) {
+      var row = ""
+      for (i <- 1 to numberOfColumns) {
+        val value = rs.getString(i)
+        if (rs.getObject(i) != null) row += value.replace(',', ' ')
+        if (i < numberOfColumns) row += ','
+      }
+      writer.write(row + "\n")
+    }
+    writer.close()
+    System.out.println("fetched table from proteus " + tableName)
+
+
+    //  ProteusJDBC.getCSVfromProteus(tableName, pathToTableCSV)
     val view = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "true")
       .option("inferSchema", "true").option("delimiter", ",").option("nullValue", "null").load(pathToTableCSV + "/" + tableName + ".csv")
     sparkSession.sqlContext.createDataFrame(view.rdd, view.schema).createOrReplaceTempView(tableName.toLowerCase);

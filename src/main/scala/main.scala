@@ -83,23 +83,25 @@ object main {
       else if (dataProfileTable != "")
         outString = extraSQLOperators.execDataProfile(sparkSession, dataProfileTable, confidence, error, seed)
       else {
-        val subQueries = getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
-        outputOfQuery = ""
-        for (subQuery <- subQueries) {
-          //println(subQuery)
-          // val rawPlans = enumerateRawPlanWithJoin(subQuery)
-          // val logicalPlans = rawPlans.map(x => sparkSession.sessionState.optimizer.execute(x))
-          // val physicalPlans = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
-          // val costOfPhysicalPlan = physicalPlans.map(x => (x, costOfPlan(x, Seq()))).sortBy(_._2._2)
-          // costOfPhysicalPlan.foreach(println)
-          //  println("cheapest plan before execution preparation:")
-          // println(costOfPhysicalPlan(0)._1)
+        try {
+          val subQueries = getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
+          outputOfQuery = ""
+          for (subQuery <- subQueries) {
+            //println(subQuery)
+            // val rawPlans = enumerateRawPlanWithJoin(subQuery)
+            // val logicalPlans = rawPlans.map(x => sparkSession.sessionState.optimizer.execute(x))
+            // val physicalPlans = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
+            // val costOfPhysicalPlan = physicalPlans.map(x => (x, costOfPlan(x, Seq()))).sortBy(_._2._2)
+            // costOfPhysicalPlan.foreach(println)
+            //  println("cheapest plan before execution preparation:")
+            // println(costOfPhysicalPlan(0)._1)
 
-          //choose the best approximate physical plan and create related synopses, presently, the lowest-cost plan
-          //////////////////////////////////////////////////////////////////////////////////////////////////////////
-          val checkpointForSampleConstruction = System.nanoTime()
-          updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
-          val pp = sparkSession.sessionState.planner.plan(ReturnAnswer(sparkSession.sessionState.optimizer.execute(subQuery))).toList(0)
+            //choose the best approximate physical plan and create related synopses, presently, the lowest-cost plan
+            //////////////////////////////////////////////////////////////////////////////////////////////////////////
+            val checkpointForSampleConstruction = System.nanoTime()
+            updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
+            val p = findBestPPWithFeatureVectors(subQuery, Seq(Seq(true, false), Seq(false, true)))
+            val pp = sparkSession.sessionState.planner.plan(ReturnAnswer(sparkSession.sessionState.optimizer.execute(subQuery))).toList(0)
           var cheapestPhysicalPlan = changeSynopsesWithScan(pp)
           executeAndStoreSample(cheapestPhysicalPlan)
           executeAndStoreSketch(cheapestPhysicalPlan)
@@ -112,10 +114,10 @@ object main {
           //////////////////////////////////////////////////////////////////////////////////////////////////////////
           val checkpointForSubQueryExecution = System.nanoTime()
           countReusedSample(cheapestPhysicalPlan)
-          cheapestPhysicalPlan.executeCollectPublic().toList.foreach(row => {
-            outputOfQuery += row.toString()
-            counterNumberOfRowGenerated += 1
-          })
+        //  cheapestPhysicalPlan.executeCollectPublic().toList.foreach(row => {
+       //     outputOfQuery += row.toString()
+       //     counterNumberOfRowGenerated += 1
+       //   })
           timeForSubQueryExecution += (System.nanoTime() - checkpointForSubQueryExecution)
           numberOfExecutedSubQuery += 1
           //////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -131,9 +133,17 @@ object main {
           //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
           tableName.clear()
+
+
+          }
+          // println(counterForQueryRow + "," + (System.nanoTime() - t) / 1000000000)
         }
-        // println(counterForQueryRow + "," + (System.nanoTime() - t) / 1000000000)
+        catch {
+          case e:Exception=>
+            print(e)
+        }
       }
+
     }
 
     /*  lastUsedOfParquetSample.foreach(println)
@@ -151,11 +161,12 @@ object main {
     flush()
   }
 
-  def findBestPPWithFeatureVectors(lp: LogicalPlan) = {
-
+  def findBestPPWithFeatureVectors(lp: LogicalPlan, vectors: Seq[Seq[Boolean]]): SparkPlan = {
+    enumerateRawPlanWithJoin(lp)
+    null
   }
 
-  def updateWarehouseWithFeatureVectors() = {
+  def updateWarehouseWithFeatureVectors(vectors: Seq[Seq[Boolean]]) = {
 
   }
 
@@ -508,7 +519,6 @@ object main {
   }
 
   def enumerateRawPlanWithJoin(rawPlan: LogicalPlan): Seq[LogicalPlan] = {
-    return Seq(rawPlan)
     var rootTemp: ListBuffer[LogicalPlan] = new ListBuffer[LogicalPlan]
     val subQueries = new ListBuffer[SubqueryAlias]()
     val queue = new mutable.Queue[LogicalPlan]()
@@ -842,6 +852,7 @@ object main {
           binningStart = 0
           binningEnd = 0
         }
+        tempQuery = "select " + binningCol + " " + tokens.slice(tokens.indexOf("from"), tokens.indexOf("confidence")).mkString(" ")
       }
       else if (tokens(i).equalsIgnoreCase("from"))
         table = tokens(i + 1)
@@ -898,7 +909,7 @@ object main {
         .option("inferSchema", "true").option("delimiter", ";").option("nullValue", "null").load(BENCH_DIR + "queryLog.csv");
       // queryLog.filter("rows>0").sort(col("clientIP"),col("seq").asc).select("statement").show()
       for (l <- src) {
-        if (!l.contains("round") && !l.contains("petror50") && !l.contains("d.branch_name") && !l.contains("p.redshift") && !l.contains("s.zt") && !l.contains("avg(s.redshift)") && !l.contains("avg(redshift)") && !l.contains("count(8) ra,dec") && !l.contains("objid,ra,dec,dered_u,dered_g,dered_r,dered_i,dered_z") && !l.contains("nik") && !l.contains("specobj,count(*)fr") && !l.contains("count(*) from specobj,count(*)") && !l.contains("specobj,photoobj") && !l.contains("legacyprimary") && !l.contains("galspecextra") && !l.contains("petrorad") && !l.contains("petrorad_r_50") && !l.contains("petrorad_50_r") && !l.contains("petrorad50_r") && !l.contains("radius") && !l.contains("petr50_r") && !l.contains("petror50_r") && !l.contains("g,err_g,r,i,z,g-r") && !l.contains("h83side") && !l.contains("zoo2mainphotoz") && !l.contains("apogeestar") && !l.contains("zoo2mainspecz") && !l.contains("floor(") && !l.contains("round(") && !l.contains("sysdatabases") && !l.contains("information_schema") && !l.contains("logintest") && !l.contains("phototag") && !l.contains("...") && !l.contains("description") && !l.contains("select     count(*),specobjid,survey,mjd,ra,dec,z,psfmag_u,class  from specphotoall  where class='qso' and z>=0  order by z,ra asc") && !l.contains("select type, count(type) from photoobj") && !l.contains("class like type") && !l.contains("tipo") && !l.contains("select count(*) from specobj where ra between 159 and 164 and u > 18 and u-g>2.2") && !l.contains("phototype") && !l.contains("select count(p.ra) from photoobj as p inner join photoobj as gno on p.objid = gno.objid where p.type = 6 and r > 15. and r < 19.") && !l.contains("photozrf") && !l.contains("b.zconf") && !l.contains("specobj where dec>") && !l.contains("+ﬂoor(") && !l.contains("xoriginalid") && !l.contains("select subclass, count(subclass)") && !l.contains("sn_") && !l.contains("crossoriginalid") && !l.contains("modelmag") && !l.contains("select  count(*)  from specobjall s  where s.ra >=") && !l.contains("gz1_agn_mel6002") && !l.contains("eclass") && !l.contains("group by (htmid") && !l.contains("select count(*) from photoobjall") && !l.contains("photoprofile") && !l.contains("peak/snr") && !l.contains("twomass") && !l.contains("masses") && !l.contains(" & ") && !l.contains("count(*)  p.objid") && !l.contains("count(*) p.objid") && !l.contains("count(*), p.objid") && !l.contains("count(*), where") && !l.contains("count(*),where") && !l.contains("count(*)   where") && !l.contains("count(*)  where") && !l.contains("count(*) where") && !l.contains("st.objid") && !l.contains("stellarmassstarformingport") && !l.contains("thingindex") && !l.contains("0x001") && !l.contains("dr9") && !l.contains("fphotoflags") && !l.contains("avg(dec), from") && !l.contains("emissionlinesport") && !l.contains("stellarmasspassiveport") && !l.contains("s.count(z)") && !l.contains("nnisinside") && !l.contains("petromag_u") && !l.contains("insert") && !l.contains("boss_target1") && !l.contains(" photoobj mode = 1") && !l.contains("and count(z)") && !l.contains("gal.extinction_u") && !l.contains("spectroflux_r") && !l.contains("platex") && !l.contains("0x000000000000ffff") && !l.contains("neighbors") && !l.contains("specline") && !l.contains("specclass")) {
+        if (l.contains("join") && !l.contains("round") && !l.contains("petror50") && !l.contains("d.branch_name") && !l.contains("p.redshift") && !l.contains("s.zt") && !l.contains("avg(s.redshift)") && !l.contains("avg(redshift)") && !l.contains("count(8) ra,dec") && !l.contains("objid,ra,dec,dered_u,dered_g,dered_r,dered_i,dered_z") && !l.contains("nik") && !l.contains("specobj,count(*)fr") && !l.contains("count(*) from specobj,count(*)") && !l.contains("specobj,photoobj") && !l.contains("legacyprimary") && !l.contains("galspecextra") && !l.contains("petrorad") && !l.contains("petrorad_r_50") && !l.contains("petrorad_50_r") && !l.contains("petrorad50_r") && !l.contains("radius") && !l.contains("petr50_r") && !l.contains("petror50_r") && !l.contains("g,err_g,r,i,z,g-r") && !l.contains("h83side") && !l.contains("zoo2mainphotoz") && !l.contains("apogeestar") && !l.contains("zoo2mainspecz") && !l.contains("floor(") && !l.contains("round(") && !l.contains("sysdatabases") && !l.contains("information_schema") && !l.contains("logintest") && !l.contains("phototag") && !l.contains("...") && !l.contains("description") && !l.contains("select     count(*),specobjid,survey,mjd,ra,dec,z,psfmag_u,class  from specphotoall  where class='qso' and z>=0  order by z,ra asc") && !l.contains("select type, count(type) from photoobj") && !l.contains("class like type") && !l.contains("tipo") && !l.contains("select count(*) from specobj where ra between 159 and 164 and u > 18 and u-g>2.2") && !l.contains("phototype") && !l.contains("select count(p.ra) from photoobj as p inner join photoobj as gno on p.objid = gno.objid where p.type = 6 and r > 15. and r < 19.") && !l.contains("photozrf") && !l.contains("b.zconf") && !l.contains("specobj where dec>") && !l.contains("+ﬂoor(") && !l.contains("xoriginalid") && !l.contains("select subclass, count(subclass)") && !l.contains("sn_") && !l.contains("crossoriginalid") && !l.contains("modelmag") && !l.contains("select  count(*)  from specobjall s  where s.ra >=") && !l.contains("gz1_agn_mel6002") && !l.contains("eclass") && !l.contains("group by (htmid") && !l.contains("select count(*) from photoobjall") && !l.contains("photoprofile") && !l.contains("peak/snr") && !l.contains("twomass") && !l.contains("masses") && !l.contains(" & ") && !l.contains("count(*)  p.objid") && !l.contains("count(*) p.objid") && !l.contains("count(*), p.objid") && !l.contains("count(*), where") && !l.contains("count(*),where") && !l.contains("count(*)   where") && !l.contains("count(*)  where") && !l.contains("count(*) where") && !l.contains("st.objid") && !l.contains("stellarmassstarformingport") && !l.contains("thingindex") && !l.contains("0x001") && !l.contains("dr9") && !l.contains("fphotoflags") && !l.contains("avg(dec), from") && !l.contains("emissionlinesport") && !l.contains("stellarmasspassiveport") && !l.contains("s.count(z)") && !l.contains("nnisinside") && !l.contains("petromag_u") && !l.contains("insert") && !l.contains("boss_target1") && !l.contains(" photoobj mode = 1") && !l.contains("and count(z)") && !l.contains("gal.extinction_u") && !l.contains("spectroflux_r") && !l.contains("platex") && !l.contains("0x000000000000ffff") && !l.contains("neighbors") && !l.contains("specline") && !l.contains("specclass")) {
           try {
             if (l.split(";")(8).toLong > 0) {
               if (l.split(';')(9).size > 30)
