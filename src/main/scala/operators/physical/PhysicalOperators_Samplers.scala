@@ -457,15 +457,19 @@ case class UniversalSampleExec2(functions: Seq[AggregateExpression], confidence:
     //   while (true) {
     child.execute().mapPartitionsWithIndex { (index, iter) =>
       iter.flatMap { row =>
-        val join = if (joinAttrs(0)._2.isInstanceOf[StringType]) hashString(row.get(joinAttrs(0)._1, joinAttrs(0)._2).toString)
-        else row.get(joinAttrs(0)._1, LongType).toString.toLong
-        var t = ((join * a + b) % s) % 100
-        //todo make faster
-        t = if (t < 0) (t + 100) else t
-        if (t < fraction * 100)
-          List(row)
-        else
+        if (row.get(joinAttrs(0)._1, joinAttrs(0)._2) == null)
           List()
+        else {
+          val join = if (joinAttrs(0)._2.isInstanceOf[StringType]) hashString(row.get(joinAttrs(0)._1, joinAttrs(0)._2).toString)
+          else row.get(joinAttrs(0)._1, LongType).toString.toLong
+          var t = ((join * a + b) % s) % 100
+          //todo make faster
+          t = if (t < 0) (t + 100) else t
+          if (t < fraction * 100)
+            List(row)
+          else
+            List()
+        }
       }
     }
     //  sampleSize = out.count()

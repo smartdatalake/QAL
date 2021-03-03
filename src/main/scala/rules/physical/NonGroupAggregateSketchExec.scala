@@ -1,5 +1,6 @@
 package rules.physical
 
+import definition.Paths.getScalingFactor
 import operators.physical._
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
@@ -9,6 +10,7 @@ import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression,
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, BinaryComparison, Cast, NamedExpression, SpecificInternalRow, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.execution.{LogicalRDD, SparkPlan, UnaryExecNode}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StringType}
+
 import scala.collection.Seq
 import scala.collection.mutable.ListBuffer
 import org.apache.spark.unsafe.types.UTF8String
@@ -288,34 +290,35 @@ case class ScaleAggregateSampleExec(confidence: Double, error: Double, seed: Lon
   //TODO what is doProduce???
   //  override protected def doProduce(ctx: CodegenContext): String = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].produce(ctx, this)).reduce(_.toString+_.toString)
 
+  lazy val scalingFactor = getScalingFactor(child)
+
+  //TODO is it ok with changing accuracy
   override protected def doExecute(): RDD[InternalRow] = {
-    //child.executeCollectPublic().foreach(println)
-    child.execute() //.map(scale)
+    if (isScaled.contains(true))
+      child.execute().map(scale)
+    else
+      child.execute()
   }
 
+  val isScaled = resultsExpression.map(x => if (x.find(x => x.toString().contains("count(") || x.toString().contains("sum(")).isDefined) true else false).toSeq
+  val types = resultsExpression.map(x => x.toAttribute.dataType)
+
   def scale(i: InternalRow): InternalRow = {
-    val scale = 10 / 3
-    val minNumberOfOccourance = 30
-    val result = new ListBuffer[UnsafeRow]
     val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
     val x = UnsafeProjection.create(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
-    for (index <- 0 to i.numFields - 1) {
-      if ((!resultsExpression(index).isInstanceOf[AttributeReference]) && (resultsExpression(index).children(0).children(0).asInstanceOf[AttributeReference].name.contains("sum")
-        || resultsExpression(index).children(0).children(0).asInstanceOf[AttributeReference].name.contains("count"))) {
-        if (i.getString(index).toInt > minNumberOfOccourance) {
-          row.update(index, UTF8String.fromString((i.getString(index).toInt * (scale)).toString))
-        }
+    println(scalingFactor)
+    for (index <- 0 to i.numFields - 1) if (isScaled(index))
+      types(index) match {
+        case LongType =>
+          row.update(index, (i.get(index, types(index)).toString.toLong * (scalingFactor)).toLong)
+        case DoubleType =>
+          row.update(index, (i.get(index, types(index)).toString.toDouble * (scalingFactor)).toDouble)
+        case IntegerType =>
+          row.update(index, (i.get(index, types(index)).toString.toInt * (scalingFactor)).toInt)
+        case _ => throw new Exception("Invalid DataType for scaling")
+
       }
-      else {
-        try {
-          row.update(index, UTF8String.fromString(i.getString(index)))
-        }
-        catch {
-          case _ =>
-            row.update(index, UTF8String.fromString("0"))
-        }
-      }
-    }
+
     return x(row)
     row.update(1, "asd")
     // row.setDouble(0, percent)
@@ -330,8 +333,8 @@ case class ScaleAggregateSampleExec(confidence: Double, error: Double, seed: Lon
     // for (index <- 0 to i.numFields - 1) {
     //   if ((!resultsExpression(index).isInstanceOf[AttributeReference]) && (resultsExpression(index).children(0).children(0).asInstanceOf[AttributeReference].name.contains("sum")
     //     || resultsExpression(index).children(0).children(0).asInstanceOf[AttributeReference].name.contains("count"))) {
-    if (i.getString(1).toInt > minNumberOfOccourance) {
-      i.update(1, (i.getString(1).toInt * (scale)).toInt)
+    if (i.getString(1).toInt > 0) {
+      i.update(1, (i.getString(1).toInt * (scalingFactor)).toInt)
       return i
       //      }
       //    }

@@ -1,13 +1,14 @@
 package extraSQL
 
-import definition.Paths.{ParquetNameToSynopses, SynopsesToParquetName, getHeaderOfOutput, lastUsedCounter, lastUsedOfParquetSample, numberOfGeneratedSynopses, parquetNameToHeader, pathToSaveSynopses, sketchesMaterialized, warehouseParquetNameToSize}
+import definition.Paths.{ParquetNameToSynopses, SynopsesToParquetName, delimiterParquetColumn, getHeaderOfOutput, lastUsedCounter, lastUsedOfParquetSample, numberOfGeneratedSynopses, parquetNameToHeader, pathToSaveSynopses, sketchesMaterialized, tableName, warehouseParquetNameToSize}
 import operators.logical.{Binning, BinningWithoutMinMax, Quantile, UniformSampleWithoutCI}
 import operators.physical.{DistinctSampleExec2, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, ReturnAnswer, SubqueryAlias}
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.execution.{LogicalRDD, RDDScanExec, SparkPlan}
+import org.apache.spark.sql.execution.exchange.{EnsureRequirements, ReuseExchange}
+import org.apache.spark.sql.execution.{CollapseCodegenStages, LogicalRDD, PlanSubqueries, RDDScanExec, ReuseSubquery, SparkPlan}
 import org.apache.spark.sql.types._
 import rules.physical.ChangeSampleToScan
 
@@ -35,6 +36,18 @@ object extraSQLOperators {
     }
   }
 
+  def prepareForExecution(sparkSession: SparkSession, plan: SparkPlan): SparkPlan = {
+    preparations(sparkSession).foldLeft(plan) { case (sp, rule) => rule.apply(sp) }
+  }
+
+  def preparations(sparkSession: SparkSession): Seq[Rule[SparkPlan]] = Seq(
+    PlanSubqueries(sparkSession),
+    EnsureRequirements(sparkSession.sessionState.conf),
+    CollapseCodegenStages(sparkSession.sessionState.conf),
+    ReuseExchange(sparkSession.sessionState.conf),
+    ReuseSubquery(sparkSession.sessionState.conf)
+  )
+
   def execQuantile(sparkSession: SparkSession, tempQuery: String, table: String, quantileCol: String, quantilePart: Int
                    , confidence: Double, error: Double, seed: Long): String = {
     var quantileColAtt: AttributeReference = null
@@ -43,20 +56,29 @@ object extraSQLOperators {
       if (p.name == quantileCol)
         quantileColAtt = p.asInstanceOf[AttributeReference]
     var out = "["
+    // if (tempQuery.size < 40) {
+    val optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(Quantile(quantileColAtt
+      , quantilePart, confidence, error, seed, scan))).toList(0)
+    updateAttributeName(sparkSession.sqlContext.sql(tempQuery).queryExecution.analyzed, new mutable.HashMap[String, Int]())
+    var cheapestPhysicalPlan = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
+    executeAndStoreSample(sparkSession, cheapestPhysicalPlan)
+    cheapestPhysicalPlan = changeSynopsesWithScan(sparkSession, cheapestPhysicalPlan)
+    executeAndStoreSketch(cheapestPhysicalPlan)
+    cheapestPhysicalPlan = prepareForExecution(sparkSession, cheapestPhysicalPlan)
 
-   // if (tempQuery.size < 40) {
-      var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0)
-      executeAndStoreSketch(optimizedPhysicalPlans)
-      executeAndStoreSample(sparkSession, optimizedPhysicalPlans)
-     // optimizedPhysicalPlans = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
-     // optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.get(0) + ",\"value\":" + x.get(1) + "}," + "\n"))
-     // return out.dropRight(2) + "]"
-   // }
-   // val plan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
-   // val optimizedPhysicalPlans = sparkSession.sessionState.executePlan(Quantile(quantileColAtt, quantilePart, confidence
-   //   , error, seed, plan)).executedPlan
+    // if (tempQuery.size < 40) {
+    //  var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(Quantile(quantileColAtt, quantilePart, confidence, error, seed, scan)).toList(0)
+    //   executeAndStoreSketch(optimizedPhysicalPlans)
+    //   executeAndStoreSample(sparkSession, optimizedPhysicalPlans)
+    // optimizedPhysicalPlans = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
+    // optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.get(0) + ",\"value\":" + x.get(1) + "}," + "\n"))
+    // return out.dropRight(2) + "]"
+    // }
+    // val plan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
+    // val optimizedPhysicalPlans = sparkSession.sessionState.executePlan(Quantile(quantileColAtt, quantilePart, confidence
+    //   , error, seed, plan)).executedPlan
 
-    optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.getDouble(0) + ",\"value\":" + x.getInt(1) + "}," + "\n"))
+    cheapestPhysicalPlan.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.getDouble(0) + ",\"value\":" + x.getInt(1) + "}," + "\n"))
     out = out.dropRight(2) + "]"
     println(out)
     out
@@ -78,35 +100,41 @@ object extraSQLOperators {
       sparkSession.sessionState.planner.plan(ReturnAnswer(Binning(binningColAtt, binningPart, binningStart, binningEnd
         , confidence, error, seed, scan))).toList(0)
     //optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += (x.mkString(";") + "\n"))
-    executeAndStoreSketch(optimizedPhysicalPlans)
-    executeAndStoreSample(sparkSession, optimizedPhysicalPlans)
-    optimizedPhysicalPlans = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
-    optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += ("{\"start\":" + x.get(0) + ",\"end\":" + x.get(1) + ",\"count\":" + x.get(2) + "}," + "\n"))
+    updateAttributeName(sparkSession.sqlContext.sql("select * from " + table).queryExecution.analyzed, new mutable.HashMap[String, Int]())
+    var cheapestPhysicalPlan = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
+    executeAndStoreSample(sparkSession, cheapestPhysicalPlan)
+    cheapestPhysicalPlan = changeSynopsesWithScan(sparkSession, cheapestPhysicalPlan)
+    executeAndStoreSketch(cheapestPhysicalPlan)
+    cheapestPhysicalPlan = prepareForExecution(sparkSession, cheapestPhysicalPlan)
+    cheapestPhysicalPlan.executeCollectPublic().foreach(x => out += ("{\"start\":" + x.get(0) + ",\"end\":" + x.get(1) + ",\"count\":" + x.get(2) + "}," + "\n"))
     out.dropRight(2) + "]"
+  }
+
+  def updateAttributeName(lp: LogicalPlan, tableFrequency: mutable.HashMap[String, Int]): Unit = lp match {
+    case SubqueryAlias(identifier, child@LogicalRDD(output, rdd, outputPartitioning, outputOrdering, isStreaming)) =>
+      val att = output.toList
+      tableFrequency.put(identifier.identifier, tableFrequency.getOrElse(identifier.identifier, 0) + 1)
+      for (i <- 0 to output.size - 1)
+        tableName.put(att(i).toAttribute.toString().toLowerCase, identifier.identifier + "_" + tableFrequency.get(identifier.identifier).get)
+    case a =>
+      a.children.foreach(x => updateAttributeName(x, tableFrequency))
   }
 
   def execDataProfile(sparkSession: SparkSession, dataProfileTable: String, confidence: Double, error: Double
                       , seed: Long) = {
     var out = "["
-    var query_code = "select * from " + dataProfileTable
+    val query_code = "select * from " + dataProfileTable
     val scan = sparkSession.sqlContext.sql(query_code).queryExecution.optimizedPlan
-    var optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(UniformSampleWithoutCI(seed, scan))).toList(0)
-    val logicalPlanToTable: mutable.HashMap[String, String] = new mutable.HashMap()
-    recursiveProcess(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed, logicalPlanToTable)
-    val sampleParquetToTable: mutable.HashMap[String, String] = new mutable.HashMap()
-    //getTableNameToSampleParquet(optimizedPhysicalPlans, logicalPlanToTable, sampleParquetToTable)
-    executeAndStoreSketch(optimizedPhysicalPlans)
-    for (a <- sampleParquetToTable.toList) {
-      if (sparkSession.sqlContext.tableNames().contains(a._1.toLowerCase)) {
-        query_code = query_code.replace(a._2.toUpperCase, a._1)
-        sparkSession.experimental.extraStrategies = Seq()
-        sparkSession.experimental.extraOptimizations = Seq()
-        optimizedPhysicalPlans = sparkSession.sqlContext.sql(query_code).queryExecution.executedPlan
-      }
-    }
+    val optimizedPhysicalPlans = sparkSession.sessionState.planner.plan(ReturnAnswer(UniformSampleWithoutCI(seed, scan))).toList(0)
+    updateAttributeName(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed, new mutable.HashMap[String, Int]())
+    var cheapestPhysicalPlan = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
+    executeAndStoreSample(sparkSession, cheapestPhysicalPlan)
+    cheapestPhysicalPlan = changeSynopsesWithScan(sparkSession, cheapestPhysicalPlan)
+    executeAndStoreSketch(cheapestPhysicalPlan)
+    cheapestPhysicalPlan = prepareForExecution(sparkSession, cheapestPhysicalPlan)
     val fraction = 10
-    val schema = optimizedPhysicalPlans.schema
-    val columns = optimizedPhysicalPlans.schema.toList.map(x => Array[Double](x.dataType match {
+    val schema = cheapestPhysicalPlan.schema
+    val columns = cheapestPhysicalPlan.schema.toList.map(x => Array[Double](x.dataType match {
       case TimestampType =>
         0
       case StringType =>
@@ -132,7 +160,7 @@ object extraSQLOperators {
       case _ =>
         11
     }, 0, 0, 0, 0, 0, 0, 0, 0))
-    optimizedPhysicalPlans.executeCollect.foreach(x => for (i <- 0 to columns.size - 1) {
+    cheapestPhysicalPlan.executeCollect.foreach(x => for (i <- 0 to columns.size - 1) {
       if (!x.isNullAt(i)) {
         columns(i)(1) += 1
         columns(i)(0) match {

@@ -3,14 +3,22 @@ package definition
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.DefaultScalaModule
 import com.fasterxml.jackson.module.scala.experimental.ScalaObjectMapper
+import operators.physical.SampleExec
 import org.apache.hadoop.hive.metastore.parser.ExpressionTree.LeafNode
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, ComplexTypeMergingExpression, NamedExpression, UnaryExpression, _}
+import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, Join, LogicalPlan, Project, Sort, SubqueryAlias}
-import org.apache.spark.sql.execution.LogicalRDD
+import org.apache.spark.sql.execution.{LeafExecNode, LogicalRDD, RDDScanExec, SparkPlan}
+import org.apache.spark.sql.types.{IntegerType, LongType, StringType, StructField, StructType}
 import sketch.Sketch
 
+import java.util
+import scala.collection.mutable.{HashMap, HashSet, ListBuffer}
 import scala.collection.{Seq, mutable}
 import scala.io.Source
 
@@ -72,17 +80,30 @@ object Paths {
   val SynopsesToParquetName = mutable.HashMap[String, String]()
   val parquetNameToHeader = new mutable.HashMap[String, String]()
   var JDBCRowLimiter: Long = 100000000
+  var mapRDDScanRowCNT: mutable.HashMap[String, Long] = new mutable.HashMap[String, Long]()
 
-  val ACCESSED_COL_MIN_FREQUENCY = 150
-  val GROUPBY_COL_MIN_FREQUENCY = 70
-  val JOIN_COL_MIN_FREQUENCY = 70
+  val ACCESSED_COL_MIN_FREQUENCY = 100
+  val GROUPBY_COL_MIN_FREQUENCY = 100
+  val JOIN_COL_MIN_FREQUENCY = 100
+  val TABLE_MIN_FREQUENCY = 1
   val MAX_NUMBER_OF_QUERY_REPETITION = 100000
 
   var Proteus_URL = ""
   var Proteus_username = ""
   var Proteus_pass = ""
   var REST_PORT = 4545
-
+  val logSchema = StructType(Array(
+    StructField("yy", IntegerType, false),
+    StructField("mm", IntegerType, false),
+    StructField("dd", IntegerType, false),
+    StructField("hh", IntegerType, false),
+    StructField("mi", IntegerType, false),
+    StructField("ss", IntegerType, false),
+    StructField("seq", LongType, true),
+    StructField("clientIP", StringType, true),
+    StructField("rows", LongType, true),
+    StructField("statement", StringType, true))
+  )
 
   def getSizeOfAtt(in: Seq[Attribute]) = in.map(x => x.dataType.defaultSize).reduce(_ + _)
 
@@ -137,6 +158,15 @@ object Paths {
   }
 
   def updateAttributeName(lp: LogicalPlan): Unit = lp match {
+    case SubqueryAlias(identifier, child@LogicalRDD(output, rdd, outputPartitioning, outputOrdering, isStreaming)) =>
+      val att = output.toList
+      for (i <- 0 to output.size - 1)
+        tableName.put(att(i).toAttribute.toString().toLowerCase, (identifier.identifier).toLowerCase)
+    case a =>
+      a.children.foreach(x => updateAttributeName(x))
+  }
+
+  def updateAttributeName(lp: LogicalPlan, tableName: mutable.HashMap[String, String]): Unit = lp match {
     case SubqueryAlias(identifier, child@LogicalRDD(output, rdd, outputPartitioning, outputOrdering, isStreaming)) =>
       val att = output.toList
       for (i <- 0 to output.size - 1)
@@ -221,7 +251,9 @@ object Paths {
   //todo fix joins
   def getJoinConditions(lp: LogicalPlan): Seq[String] = lp match {
     case j@Filter(condition, child) =>
-      getJoinConditions(condition)
+      getJoinConditions(condition) ++ getJoinConditions(child)
+    case j@Join(left, right, joinType, condition) if condition.isDefined =>
+      getJoinConditions(condition.get) ++ getJoinConditions(left) ++ getJoinConditions(right)
     case l: LeafNode =>
       Seq()
     case a =>
@@ -237,7 +269,7 @@ object Paths {
     case e@EqualTo(left, right) =>
       if (e.left.find(_.isInstanceOf[AttributeReference]).isDefined && e.right.find(_.isInstanceOf[AttributeReference]).isDefined
         && getAccessedColsOfExpression(e.left).size == 1 && getAccessedColsOfExpression(e.right).size == 1)
-        Seq(getAccessedColsOfExpression(e.left).mkString(",") + "=" + getAccessedColsOfExpression(e.right).mkString(","))
+        Seq(Seq(getAccessedColsOfExpression(e.left)(0), getAccessedColsOfExpression(e.right)(0)).sortBy(_.toString).mkString("="))
       else
         Seq()
     //   case e: BinaryComparison =>
@@ -275,18 +307,208 @@ object Paths {
     Paths.Proteus_username = parsedJson.getOrElse("ProteusUsername", "")
     Paths.Proteus_pass = parsedJson.getOrElse("ProteusPassword", "")
     Paths.REST_PORT = parsedJson.getOrElse("port", "").toInt
-    pathToTableCSV = parentDir + "data_csv/"
-    pathToSketches = parentDir + "materializedSketches/"
-    pathToQueryLog = parentDir + "queryLog"
-    pathToTableParquet = parentDir + "data_parquet/"
-    pathToSaveSynopses = parentDir + "materializedSynopsis/"
-    pathToCIStats = parentDir + "CIstats/"
+    pathToTableCSV = parentDir //+ "data_csv/"
+    pathToSketches = parentDir //+ "materializedSketches/"
+    pathToQueryLog = parentDir //+ "queryLog"
+    pathToTableParquet = parentDir //+ "data_parquet/"
+    pathToSaveSynopses = parentDir // + "materializedSynopsis/"
+    pathToCIStats = parentDir //+ "CIstats/"
     /*  pathToTableCSV.toFile.createIfNotExists()
       pathToSketches.toFile.createIfNotExists()
       pathToQueryLog.toFile.createIfNotExists()
       pathToTableParquet.toFile.createIfNotExists()
       pathToSaveSynopses.toFile.createIfNotExists()
       pathToCIStats.toFile.createIfNotExists()*/
+  }
+
+  def getScalingFactor(pp: SparkPlan): Double = pp match {
+    case s: SampleExec =>
+      (1 / s.fraction) * getScalingFactor(s.child)
+    case l@RDDScanExec(output, rdd, name, outputPartitioning, outputOrdering) =>
+      if (name.contains("sample"))
+        1 / ParquetNameToSynopses.get(name).get.split(delimiterSynopsisFileNameAtt)(4).toDouble
+      else
+        1.0
+    case a =>
+      a.children.map(getScalingFactor).reduce(_ * _)
+  }
+
+  def saveExecutableQuery(queryLog: DataFrame, sparkSession: SparkSession, pathToSave: String): Unit = {
+    queryLog.filter("statement is not null").filter(row => row.getAs[String]("statement").trim.length > 0)
+      .filter(x => {
+        try {
+          if (sparkSession.sqlContext.sql(x.getAs[String]("statement")).queryExecution.analyzed != null) true else false
+        }
+        catch {
+          case _ => false
+        }
+      }).write.format("com.databricks.spark.csv")
+      .option("header", "false").option("delimiter", ";").option("nullValue", "null")
+      .save(pathToSave)
+  }
+
+  def queryToVector(queriesStatement: Seq[String], sparkSession: SparkSession): (ListBuffer[String], mutable.HashMap[String, Int]
+    , mutable.HashMap[String, Int], mutable.HashMap[String, Int], mutable.HashMap[String, Int], mutable.HashMap[String, Int]
+    , mutable.HashMap[String, Int]) = {
+
+    val accessedColFRQ = new HashMap[String, Int]()
+    val groupByFRQ = new HashMap[String, Int]()
+    val joinKeyFRQ = new HashMap[String, Int]()
+    val tableFRQ = new HashMap[String, Int]()
+    val accessedColToVectorIndex = new HashMap[String, Int]()
+    val groupByKeyToVectorIndex = new HashMap[String, Int]()
+    val joinKeyToVectorIndex = new HashMap[String, Int]()
+    val tableToVectorIndex = new HashMap[String, Int]()
+    val sequenceOfQueryEncoding = new ListBuffer[QueryEncoding]()
+    val tableName: HashMap[String, String] = new HashMap()
+    for (query <- queriesStatement) {
+      val lp = sparkSession.sqlContext.sql(query).queryExecution.analyzed
+      tableName.clear()
+      updateAttributeName(lp, tableName)
+      val accessedColsSet = new HashSet[String]()
+      extractAccessedColumn(lp, accessedColsSet)
+      val accessedCols = accessedColsSet.toSeq.filter(!_.contains("userDefinedColumn"))
+      val joinKeys = Paths.getJoinConditions(lp).filter(!_.contains("userDefinedColumn"))
+      val groupByKeys = getGroupByKeys(lp).filter(!_.contains("userDefinedColumn"))
+      val tables = getTables(lp)
+      for (col <- accessedCols)
+        accessedColFRQ.put(col, accessedColFRQ.getOrElse(col, 0) + 1)
+      for (key <- groupByKeys)
+        groupByFRQ.put(key, groupByFRQ.getOrElse(key, 0) + 1)
+      for (key <- joinKeys)
+        joinKeyFRQ.put(key, joinKeyFRQ.getOrElse(key, 0) + 1)
+      for (table <- tables)
+        tableFRQ.put(table, tableFRQ.getOrElse(table, 0) + 1)
+      sequenceOfQueryEncoding.+=(new QueryEncoding(accessedCols, groupByKeys, joinKeys, tables, query, 0))
+    }
+    var vectorIndex = 0
+    for (col <- accessedColFRQ.filter(_._2 >= ACCESSED_COL_MIN_FREQUENCY).map(_._1).toList.sortBy(x => x))
+      if (!accessedColToVectorIndex.get(col).isDefined) {
+        accessedColToVectorIndex.put(col, vectorIndex)
+        vectorIndex += 1
+      }
+    for (col <- groupByFRQ.filter(_._2 >= GROUPBY_COL_MIN_FREQUENCY).map(_._1).toList)
+      if (!groupByKeyToVectorIndex.get(col).isDefined) {
+        groupByKeyToVectorIndex.put(col, vectorIndex)
+        vectorIndex += 1
+      }
+    for (col <- joinKeyFRQ.filter(_._2 >= JOIN_COL_MIN_FREQUENCY).map(_._1).toList)
+      if (!joinKeyToVectorIndex.get(col).isDefined) {
+        joinKeyToVectorIndex.put(col, vectorIndex)
+        vectorIndex += 1
+      }
+    for (table <- tableFRQ.filter(_._2 >= TABLE_MIN_FREQUENCY).map(_._1).toList)
+      if (!tableToVectorIndex.get(table).isDefined) {
+        joinKeyToVectorIndex.put(table, vectorIndex)
+        vectorIndex += 1
+      }
+    val vectorSize = (vectorIndex)
+    (sequenceOfQueryEncoding.map(queryEncoding => {
+      val vector = new Array[Int](vectorSize)
+      util.Arrays.fill(vector, 0)
+      for (accCol <- queryEncoding.accessedCols) if (accessedColToVectorIndex.get(accCol).isDefined)
+        vector(accessedColToVectorIndex.get(accCol).get) = 1
+      for (groupCol <- queryEncoding.groupByKeys) if (groupByKeyToVectorIndex.get(groupCol).isDefined)
+        vector(groupByKeyToVectorIndex.get(groupCol).get) = 1
+      for (joinCol <- queryEncoding.joinKeys) if (joinKeyToVectorIndex.get(joinCol).isDefined)
+        vector(joinKeyToVectorIndex.get(joinCol).get) = 1
+      for (table <- queryEncoding.tables) if (tableToVectorIndex.get(table).isDefined)
+        vector(tableToVectorIndex.get(table).get) = 1
+      vector.mkString("")
+    }), accessedColToVectorIndex, groupByKeyToVectorIndex, joinKeyToVectorIndex, accessedColFRQ, groupByFRQ, joinKeyFRQ)
+  }
+
+  def processToVector(processes: ListBuffer[ListBuffer[(String, Int, Int, Int, Int, Int, Int, Long, String)]]
+                      , sparkSession: SparkSession): (ListBuffer[ListBuffer[String]], mutable.HashMap[String, Int], mutable.HashMap[String, Int], mutable.HashMap[String, Int], mutable.HashMap[String, Int], mutable.HashMap[String, Int], mutable.HashMap[String, Int], mutable.HashMap[String, Int], mutable.HashMap[String, Int], mutable.HashMap[String, (String, Long)]) = {
+
+    val accessedColFRQ = new HashMap[String, Int]()
+    val groupByFRQ = new HashMap[String, Int]()
+    val joinKeyFRQ = new HashMap[String, Int]()
+    val tableFRQ = new HashMap[String, Int]()
+    val vec2FeatureAndFRQ = new HashMap[String, (String, Long)]()
+    val accessedColToVectorIndex = new HashMap[String, Int]()
+    val groupByKeyToVectorIndex = new HashMap[String, Int]()
+    val joinKeyToVectorIndex = new HashMap[String, Int]()
+    val tableToVectorIndex = new HashMap[String, Int]()
+    val sequenceOfQueryEncoding = new ListBuffer[ListBuffer[QueryEncoding]]()
+    val tableName: HashMap[String, String] = new HashMap()
+    for (process <- processes) {
+      val processTemp = new ListBuffer[QueryEncoding]()
+      for (query <- process) {
+        val lp = sparkSession.sqlContext.sql(query._9).queryExecution.analyzed
+        tableName.clear()
+        updateAttributeName(lp, tableName)
+        val accessedColsSet = new HashSet[String]()
+        extractAccessedColumn(lp, accessedColsSet)
+        val accessedCols = accessedColsSet.toSeq.distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
+        val joinKeys = Paths.getJoinConditions(lp).distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
+        val groupByKeys = getGroupByKeys(lp).distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
+        val tables = getTables(lp).distinct.sortBy(_.toString)
+        for (col <- accessedCols)
+          accessedColFRQ.put(col, accessedColFRQ.getOrElse(col, 0) + 1)
+        for (key <- groupByKeys)
+          groupByFRQ.put(key, groupByFRQ.getOrElse(key, 0) + 1)
+        for (key <- joinKeys)
+          joinKeyFRQ.put(key, joinKeyFRQ.getOrElse(key, 0) + 1)
+        for (table <- tables)
+          tableFRQ.put(table, tableFRQ.getOrElse(table, 0) + 1)
+        processTemp.+=(new QueryEncoding(accessedCols, groupByKeys, joinKeys, tables, query._9, query._8))
+      }
+      sequenceOfQueryEncoding.+=(processTemp)
+    }
+    var vectorIndex = 0
+    for (col <- accessedColFRQ.filter(_._2 >= ACCESSED_COL_MIN_FREQUENCY).map(_._1).toList.sortBy(_.toString))
+      if (!accessedColToVectorIndex.get(col).isDefined) {
+        accessedColToVectorIndex.put(col, vectorIndex)
+        vectorIndex += 1
+      }
+    for (col <- groupByFRQ.filter(_._2 >= GROUPBY_COL_MIN_FREQUENCY).map(_._1).toList.sortBy(_.toString))
+      if (!groupByKeyToVectorIndex.get(col).isDefined) {
+        groupByKeyToVectorIndex.put(col, vectorIndex)
+        vectorIndex += 1
+      }
+    for (col <- joinKeyFRQ.filter(_._2 >= JOIN_COL_MIN_FREQUENCY).map(_._1).toList.sortBy(_.toString))
+      if (!joinKeyToVectorIndex.get(col).isDefined) {
+        joinKeyToVectorIndex.put(col, vectorIndex)
+        vectorIndex += 1
+      }
+    for (table <- tableFRQ.filter(_._2 >= TABLE_MIN_FREQUENCY).map(_._1).toList.sortBy(_.toString))
+      if (!tableToVectorIndex.get(table).isDefined) {
+        tableToVectorIndex.put(table, vectorIndex)
+        vectorIndex += 1
+      }
+    val vectorSize = (vectorIndex)
+
+    /*(sequenceOfQueryEncoding.map(processes => processes.map(queryEncoding => {
+      (queryEncoding.accessedCols.toList.sortBy(_.toString).mkString(",") + "@" + queryEncoding.groupByKeys.toList.sortBy(_.toString).mkString(",") + "@"
+        + queryEncoding.joinKeys.toList.sortBy(_.toString).mkString(",") + "@" + queryEncoding.tables.toList.sortBy(_.toString).mkString(","))
+    })), accessedColToVectorIndex, groupByKeyToVectorIndex, joinKeyToVectorIndex, tableToVectorIndex, accessedColFRQ, groupByFRQ, joinKeyFRQ, tableFRQ)
+*/
+
+    (sequenceOfQueryEncoding.map(processes => processes.map(queryEncoding => {
+      val vector = new Array[Int](vectorSize)
+      util.Arrays.fill(vector, 0)
+      for (accCol <- queryEncoding.accessedCols) if (accessedColToVectorIndex.get(accCol).isDefined)
+        vector(accessedColToVectorIndex.get(accCol).get) = 1
+      for (groupCol <- queryEncoding.groupByKeys) if (groupByKeyToVectorIndex.get(groupCol).isDefined)
+        vector(groupByKeyToVectorIndex.get(groupCol).get) = 1
+      for (joinCol <- queryEncoding.joinKeys) if (joinKeyToVectorIndex.get(joinCol).isDefined)
+        vector(joinKeyToVectorIndex.get(joinCol).get) = 1
+      for (table <- queryEncoding.tables) if (tableToVectorIndex.get(table).isDefined)
+        vector(tableToVectorIndex.get(table).get) = 1
+      vec2FeatureAndFRQ.put(vector.mkString(""), (queryEncoding.accessedCols.toList.sortBy(_.toString).mkString(",") + "@"
+        + queryEncoding.groupByKeys.toList.sortBy(_.toString).mkString(",") + "@" + queryEncoding.joinKeys.toList.sortBy(_.toString).mkString(",")
+        + "@" + queryEncoding.tables.toList.sortBy(_.toString).mkString(","), vec2FeatureAndFRQ.getOrElse[(String, Long)](vector.mkString(""), ("", 0))._2 + 1))
+      vector.mkString("")
+    })), accessedColToVectorIndex, groupByKeyToVectorIndex, joinKeyToVectorIndex, tableToVectorIndex, accessedColFRQ, groupByFRQ, joinKeyFRQ, tableFRQ, vec2FeatureAndFRQ)
+
+  }
+
+  def getTables(lp: LogicalPlan): Seq[String] = lp match {
+    case SubqueryAlias(identifier, child@LogicalRDD(output, rdd, outputPartitioning, outputOrdering, isStreaming)) =>
+      Seq(identifier.identifier.toLowerCase)
+    case t =>
+      t.children.flatMap(getTables)
   }
 
 }

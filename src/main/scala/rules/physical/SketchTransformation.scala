@@ -240,10 +240,16 @@ object SketchPhysicalTransformation extends Strategy {
   def getPossibleCMSPlan(): TraversableOnce[SparkPlan] = ???
 
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
+    case q@Quantile(quantileCol, quantilePart, confidence, error, seed, child) if (child.find(x => x.isInstanceOf[Join]).isEmpty) =>
+      Seq(QuantileSketchExec(quantilePart, q.output, DyadicRangeExec(null, confidence, error, seed, null, null, quantileCol, child.find(x => x.isInstanceOf[LogicalRDD]).get.asInstanceOf[LogicalRDD])))
     case q@Quantile(quantileCol, quantilePart, confidence, error, seed, child: LogicalRDD) =>
       Seq(QuantileSketchExec(quantilePart, q.output, DyadicRangeExec(null, confidence, error, seed, null, null, quantileCol, child)))
+    case b@Binning(binningCol, binningPart, binningStart, binningEnd, confidence, error, seed, child) if (child.find(x => x.isInstanceOf[Join]).isEmpty) =>
+      Seq(BinningSketchExec(binningPart, binningStart, binningEnd, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child.find(x => x.isInstanceOf[LogicalRDD]).get.asInstanceOf[LogicalRDD])))
     case b@Binning(binningCol, binningPart, binningStart, binningEnd, confidence, error, seed, child: LogicalRDD) =>
       Seq(BinningSketchExec(binningPart, binningStart, binningEnd, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child)))
+    case b@BinningWithoutMinMax(binningCol, binningPart, confidence, error, seed, child) if (child.find(x => x.isInstanceOf[Join]).isEmpty)  =>
+      Seq(BinningWithoutMaxMinSketchExec(binningPart, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child.find(x => x.isInstanceOf[LogicalRDD]).get.asInstanceOf[LogicalRDD])))
     case b@BinningWithoutMinMax(binningCol, binningPart, confidence, error, seed, child: LogicalRDD) =>
       Seq(BinningWithoutMaxMinSketchExec(binningPart, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child)))
     case ApproximatePhysicalAggregation(confidence, error, seed, hasJoin, groupingExpressions

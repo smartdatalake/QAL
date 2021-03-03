@@ -1,5 +1,5 @@
 import definition.Paths._
-import definition.{Paths}
+import definition.Paths
 import extraSQL.{extraRulesWithoutSampling, extraSQLOperators}
 import main._
 import org.apache.spark.sql.SparkSession
@@ -7,8 +7,9 @@ import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, ReturnAnswer, S
 import org.apache.spark.sql.execution.{LogicalRDD, SparkPlan}
 import rules.logical.{ApproximateInjector, pushFilterUp}
 import rules.physical.{SampleTransformation, SketchPhysicalTransformation}
-
-import java.io.{BufferedReader, BufferedWriter, File, FileWriter, InputStreamReader}
+import java.io.FileInputStream
+import java.io.ObjectInputStream
+import java.io.{BufferedReader, BufferedWriter, File, FileOutputStream, FileWriter, InputStreamReader, ObjectOutputStream}
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
 import java.sql.{Connection, DriverManager, ResultSet, ResultSetMetaData, Statement}
@@ -20,10 +21,9 @@ import scala.util.control.Breaks.{break, breakable}
 object mainSDL {
   val sparkSession = SparkSession.builder
     .appName("QAL")
-   // .master("local[*]")
+    .master("local[*]")
     .getOrCreate();
   val tableCounter = new mutable.HashMap[String, Int]()
-  var mapRDDScanRowCNT: mutable.HashMap[String, Long] = new mutable.HashMap[String, Long]()
 
   def main(args: Array[String]): Unit = {
     SparkSession.setActiveSession(sparkSession)
@@ -33,11 +33,21 @@ object mainSDL {
     sparkSession.conf.set("spark.driver.maxResultSize", "8g")
     sparkSession.conf.set("spark.sql.codegen.wholeStage", false); // disable codegen
     sparkSession.conf.set("spark.sql.crossJoin.enabled", true)
-
     readSDLConfiguration()
     loadTables()
+//    sparkSession.sql("select count(revenue) from PFT p, SCT s where p.company_acheneID= s.acheneID").show()
+    if (new java.io.File(parentDir + "warehouseParquetNameToSize.ser").exists)
+      new ObjectInputStream(new FileInputStream(parentDir + "warehouseParquetNameToSize.ser")).readObject.asInstanceOf[mutable.HashMap[String, Long]].foreach((a) => warehouseParquetNameToSize.put(a._1, a._2))
+    if (new java.io.File(parentDir + "ParquetNameToSynopses.ser").exists)
+      new ObjectInputStream(new FileInputStream(parentDir + "ParquetNameToSynopses.ser")).readObject.asInstanceOf[mutable.HashMap[String, String]].foreach((a) => ParquetNameToSynopses.put(a._1, a._2))
+    if (new java.io.File(parentDir + "SynopsesToParquetName.ser").exists)
+      new ObjectInputStream(new FileInputStream(parentDir + "SynopsesToParquetName.ser")).readObject.asInstanceOf[mutable.HashMap[String, String]].foreach((a) => SynopsesToParquetName.put(a._1, a._2))
+    if (new java.io.File(parentDir + "lastUsedOfParquetSample.ser").exists)
+      new ObjectInputStream(new FileInputStream(parentDir + "lastUsedOfParquetSample.ser")).readObject.asInstanceOf[mutable.HashMap[String, Long]].foreach((a) => lastUsedOfParquetSample.put(a._1, a._2))
+    if (new java.io.File(parentDir + "parquetNameToHeader.ser").exists)
+      new ObjectInputStream(new FileInputStream(parentDir + "parquetNameToHeader.ser")).readObject.asInstanceOf[mutable.HashMap[String, String]].foreach((a) => parquetNameToHeader.put(a._1, a._2))
     mapRDDScanRowCNT = readRDDScanRowCNT(pathToTableParquet)
-    sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
+    sparkSession.experimental.extraStrategies = Seq(/*extraRulesWithoutSampling,*/ SketchPhysicalTransformation, SampleTransformation);
 
 
     if (REST) {
@@ -85,7 +95,7 @@ object mainSDL {
             val query = inputHTTP.replace("get /qal?query=", "").replace(" http/1.1", "")
             //  try {
             queryLog += (query)
-            val past = if (queryLog.size >= windowSize) queryLog.slice(queryLog.size - windowSize, queryLog.size - 1) else queryLog.slice(0, queryLog.size - 1)
+            val past = if (queryLog.size >= windowSize) queryLog.slice(queryLog.size - windowSize, queryLog.size) else queryLog.slice(0, queryLog.size)
             out = executeQuery(query, past.toList)
             responseDocument = (out).getBytes("UTF-8")
             responseHeader = ("HTTP/1.1 200 OK\r\n" + "Content-Type: text/html; charset=UTF-8\r\n" + "Content-Length: " + responseDocument.length + "\r\n\r\n").getBytes("UTF-8")
@@ -132,26 +142,36 @@ object mainSDL {
     val (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
     , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
     sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed), new pushFilterUp);
+    if (confidence >= .99 && error <= .10)
+      Paths.fractionInitialize = .55
+    else if (confidence >= .90 && error <= .10)
+      Paths.fractionInitialize = .5
+    else if (confidence >= .90 && error <= .20)
+      Paths.fractionInitialize = .45
+    else if (confidence >= .80 && error <= .20)
+      Paths.fractionInitialize = .4
+    else
+      Paths.fractionInitialize = .3
 
     if (quantileCol != "") {
-      sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
+      sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation, SampleTransformation);
       val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(tempQuery)
       checkAndCreateTable(logicalPlan)
       outString = extraSQLOperators.execQuantile(sparkSession, tempQuery, table, quantileCol, quantilePart, confidence, error, seed)
     } else if (binningCol != "") {
-      sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
+      sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation, SampleTransformation);
       val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(tempQuery)
       checkAndCreateTable(logicalPlan)
       outString = extraSQLOperators.execBinning(sparkSession, table, binningCol, binningPart, binningStart, binningEnd, confidence, error, seed)
     } else if (dataProfileTable != "") {
-      sparkSession.experimental.extraStrategies = Seq(extraRulesWithoutSampling, SketchPhysicalTransformation, SampleTransformation);
-      val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(tempQuery)
+      val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan("select * from " + dataProfileTable)
       checkAndCreateTable(logicalPlan)
+      sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation, SampleTransformation);
       outString = extraSQLOperators.execDataProfile(sparkSession, dataProfileTable, confidence, error, seed)
     } else {
       try {
         sparkSession.experimental.extraStrategies = Seq(SampleTransformation);
-        val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(tempQuery)
+        val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(query_code)
         checkAndCreateTable(logicalPlan)
         val analyzed = sparkSession.sqlContext.sql(query_code).queryExecution.analyzed
         //choose the best approximate physical plan and create related synopses, presently, the lowest-cost plan
@@ -164,6 +184,7 @@ object mainSDL {
         cheapestPhysicalPlan = changeSynopsesWithScan(cheapestPhysicalPlan)
         cheapestPhysicalPlan = prepareForExecution(cheapestPhysicalPlan)
         executeAndStoreSketch(cheapestPhysicalPlan)
+        println(cheapestPhysicalPlan)
         timeForSampleConstruction += (System.nanoTime() - checkpointForSampleConstruction)
         //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -186,6 +207,21 @@ object mainSDL {
     updateWarehouse(future)
     timeForUpdateWarehouse += (System.nanoTime() - checkpointForWarehouseUpdate)
     //////////////////////////////////////////////////////////////////////////////////////////////////////////
+    var oos: ObjectOutputStream = new ObjectOutputStream(new FileOutputStream(parentDir + "warehouseParquetNameToSize.ser"))
+    oos.writeObject(warehouseParquetNameToSize)
+    oos.close()
+    oos = new ObjectOutputStream(new FileOutputStream(parentDir + "ParquetNameToSynopses.ser"))
+    oos.writeObject(ParquetNameToSynopses)
+    oos.close()
+    oos = new ObjectOutputStream(new FileOutputStream(parentDir + "SynopsesToParquetName.ser"))
+    oos.writeObject(SynopsesToParquetName)
+    oos.close()
+    oos = new ObjectOutputStream(new FileOutputStream(parentDir + "lastUsedOfParquetSample.ser"))
+    oos.writeObject(lastUsedOfParquetSample)
+    oos.close()
+    oos = new ObjectOutputStream(new FileOutputStream(parentDir + "parquetNameToHeader.ser"))
+    oos.writeObject(parquetNameToHeader)
+    oos.close()
     tableName.clear()
     outString
   }
@@ -219,7 +255,7 @@ object mainSDL {
   }
 
   def loadTables(): Unit = {
-    (new File(pathToTableParquet)).listFiles.foreach(table => {
+    (new File(pathToTableParquet)).listFiles.filter(_.getName.contains(".parquet")).foreach(table => {
       val view = sparkSession.read.parquet(table.getAbsolutePath);
       sparkSession.sqlContext.createDataFrame(view.rdd, view.schema).createOrReplaceTempView(table.getName.split("\\.")(0).toLowerCase);
     })
@@ -284,6 +320,7 @@ object mainSDL {
     view.write.format("parquet").save(pathToTableParquet + "/" + tableName.toLowerCase + ".parquet");
     val lRDD = sparkSession.sessionState.catalog.lookupRelation(org.apache.spark.sql.catalyst.TableIdentifier
     (tableName, None)).children(0).asInstanceOf[LogicalRDD]
+    // new File(pathToTableCSV + "/" + tableName + ".csv").delete()
     mapRDDScanRowCNT.put(lRDD.output.map(o => tableName + "." + o.name.split("#")(0)).mkString(";").toLowerCase, folderSize(new File(pathToTableParquet + "/" + tableName.toLowerCase + ".parquet")))
   }
 

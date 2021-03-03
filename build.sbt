@@ -6,12 +6,12 @@ version := "1.0"
 scalaVersion := "2.11.12"
 
 organization := "TUE"
-
+unmanagedJars in Compile += file("lib/avatica-1.13.0.jar")
 val algebraVersion = "0.6.0"
 val javaEwahVersion = "1.1.4"
 val sparkVersion = "2.4.3"
 
-unmanagedJars in Compile += file("lib/avatica-1.13.0.jar")
+unmanagedJars in Compile += file("~/avatica-1.13.0.jar")
 
 libraryDependencies += "org.scala-lang" % "scala-library" % "2.11.12"
 
@@ -26,6 +26,8 @@ libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-core" % sparkVersion % "provided",
   "org.apache.spark" %% "spark-yarn" % sparkVersion,
   "org.apache.spark" %% "spark-catalyst" % sparkVersion,
+  "co.theasi" %% "plotly" % "0.2.0",
+  "com.github.wookietreiber" %% "scala-chart" % "0.5.1",
   "org.apache.spark" %% "spark-sql" % sparkVersion,
   "org.apache.spark" %% "spark-mllib" % sparkVersion,
   "org.apache.spark" %% "spark-streaming" % sparkVersion,
@@ -37,9 +39,8 @@ libraryDependencies ++= Seq(
   "com.github.nscala-time" %% "nscala-time" % "1.8.0",
   "com.sparkjava" % "spark-core" % "2.9.1"
 )
-
 assemblyMergeStrategy in assembly := {
-  case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+  case PathList("META-INF", xs@_*) => MergeStrategy.discard
   case x => MergeStrategy.first
 }
 
