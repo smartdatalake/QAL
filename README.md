@@ -36,7 +36,6 @@ The source code is available on the GitHub repository of SmartDataLake. To make 
 6) Copy avatica-1.13.0.jar which is a library for Proteus JDBC connector, to the same folder of SDL_QAL_API.jar.
 7) If the service is going to be installed without a REST APIs endpoint, create a text file named log.txt that each line of the file is an approximate query.
 8) Create a JSON file named QALconf.txt in the same folder of SDL_QAL_API.jar which contains configurations as shown below:
-9) 
 {
 
 “fractionInitialize” : initial value for sampling rate,
