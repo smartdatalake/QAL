@@ -27,6 +27,7 @@ QAL is implemented in Scala v.2.11.12, and it runs on top of Apache Spark v.2.4.
 ###### Create executable JAR file:
 
 The source code is available on the GitHub repository of SmartDataLake. To make a stand-alone jar file, the following steps are required:
+
 1) Install Git, Java, Scala, and SBT.
 2) Clone or download the QAL project from the source code.
 3) Package and assembly the source project with SBT.
@@ -59,6 +60,7 @@ The source code is available on the GitHub repository of SmartDataLake. To make 
 }
 9) Start a Spark cluster and Proteus server having JDBC connection.
 10) In command line do:
+
 path_to_spark-submit --class mainSDL --driver-class-path path_to_avatica_jar_file --master spark_cluster_IP --executor-memory XXg --driver-memory XXg SDL_QAL_API.jar
 11) QAL REST APIs are listening on the port configured in QALconf.txt; Check the service by sending GET request IP:port/alive.
 12) Send your approximate query as a GET request to localhost:port/QAL.
@@ -66,6 +68,7 @@ path_to_spark-submit --class mainSDL --driver-class-path path_to_avatica_jar_fil
 ###### Docker image installation
 
 The QAL service requires a running Spark cluster to execute the stand-alone jar file. To make it easier for the user, we provide a Docker image hosting a Spark cluster and inject the QAL service inside this image. After executing and deploying the image, the QAL service exposed over a desired port, will be ready as a REST API. To prepare the Docker image, the following steps should be performed:
+
 1) Generate the stand-alone jar file named SDL_QAL_API.jar
 2) In the same folder, put the jar file avatica-1.13.0.jar, empty buffer.tmp, and conf.txt
 3) Set QALconf.txt as below:
@@ -93,21 +96,32 @@ The QAL service requires a running Spark cluster to execute the stand-alone jar 
 4) Make a plain file named Dockerfile containing the code below:
 
 FROM gradiant/spark:latest
+
 RUN mkdir /opt/spark-2.4.4-bin-hadoop2.7/local/data_csv
+
 RUN mkdir /opt/spark-2.4.4-bin-hadoop2.7/local/materializedSketches
+
 RUN mkdir /opt/spark-2.4.4-bin-hadoop2.7/local/data_parquet
+
 RUN mkdir /opt/spark-2.4.4-bin-hadoop2.7/local/materializedSynopses
+
 RUN touch /opt/spark-2.4.4-bin-hadoop2.7/local/log.txt
+
 COPY SDL_QAL_API.jar /opt/spark-2.4.4-bin-hadoop2.7/local/
+
 COPY QALconf.txt /opt/spark-2.4.4-bin-hadoop2.7/local/
+
 COPY avatica-1.13.0.jar /opt/spark-2.4.4-bin-hadoop2.7/local/
+
 EXPOSE 4545
 CMD ["spark-submit","--class"," mains.SDL", "--master",";spark://spark-master:7077",
 "SDL_QAL_API.jar"]
 
 5) Open a command line in the same directory and run:
+
 docker build -t qal:1.0
 6) Deploy the image with:
+
 docker run -d -p 127.0.0.1:4545:4545/tcp qal:1.0
 7) Start a Proteus instance and add its credentials via localhost:4545/changeProteus. The QAL REST API is listening on port 4545. Check the service by sending a GET request to localhost:4545/alive
 
