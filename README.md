@@ -36,6 +36,7 @@ The source code is available on the GitHub repository of SmartDataLake. To make 
 6) Copy avatica-1.13.0.jar which is a library for Proteus JDBC connector, to the same folder of SDL_QAL_API.jar.
 7) If the service is going to be installed without a REST APIs endpoint, create a text file named log.txt that each line of the file is an approximate query.
 8) Create a JSON file named QALconf.txt in the same folder of SDL_QAL_API.jar which contains configurations as shown below:
+
 {
 
 “fractionInitialize” : initial value for sampling rate,
@@ -72,6 +73,7 @@ The QAL service requires a running Spark cluster to execute the stand-alone jar 
 1) Generate the stand-alone jar file named SDL_QAL_API.jar
 2) In the same folder, put the jar file avatica-1.13.0.jar, empty buffer.tmp, and conf.txt
 3) Set QALconf.txt as below:
+
 {
 
 “fractionInitialize” : 0.1,
@@ -93,6 +95,7 @@ The QAL service requires a running Spark cluster to execute the stand-alone jar 
 “ProteusPassword”: set password for the username,
 
 }
+
 4) Make a plain file named Dockerfile containing the code below:
 
 FROM gradiant/spark:latest
