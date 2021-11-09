@@ -1,36 +1,28 @@
-The QAL service is available via a REST API receiving approximate queries in JSON format and returning the approximated results in JSON format. By default, the QAL service listens on port 4545, and it is configurable at installation phase. The input data must exist in RAW as a
-materialized view, and it must be accessible via the user’s Proteus JDBC connector. The input
-parameters and API functions are as follows:
+The QAL service is available via a REST API receiving approximate queries in JSON format and returning the approximated results in JSON format. By default, the QAL service listens on port 4545, and it is configurable at installation phase. The input data must exist in RAW as a materialized view, and it must be accessible via the user’s Proteus JDBC connector. The input parameters and API functions are as follows:
 
 /alive: it checks the status of the QAL service. It has no input parameter.
 
-/QAL: it receives the approximate query annotated with a user-defined confidence interval. If the
-query does not contain an approximation rate, then QAL executes the exact version of it. The
-query string is sent via the query parameter inside the request. As the QAL receives a query, it
-contacts the Proteus server to fetch required columns from the target tables, so the tables must be
-accessible from the Proteus instance. The names and definitions of input parameters are:
+/QAL: it receives the approximate query annotated with a user-defined confidence interval. If the query does not contain an approximation rate, then QAL executes the exact version of it. The query string is sent via the query parameter inside the request. As the QAL receives a query, it contacts the Proteus server to fetch required columns from the target tables, so the tables must be accessible from the Proteus instance. The names and definitions of input parameters are: 
 
    ● query: it contains the string of the approximate query.
 
-/changeWRSize: QAL stores synopses in the warehouse to use them again. This request sets the
-size of the warehouse in MB. Default is 1000 MB.
+/changeWRSize: QAL stores synopses in the warehouse to use them again. This request sets the size of the warehouse in MB. Default is 1000 MB.
 
    ● quota: it indicates the new warehouse size in MB.
 
-/flushSample: QAL stores synopses in the warehouse to reuse them in next queries execution.
-This request flushes the warehouse and removes synopses. No input parameter is required. No
-input parameter is required.
+/flushSample: QAL stores synopses in the warehouse to reuse them in next queries execution. This request flushes the warehouse and removes synopses. No input parameter is required. No input parameter is required.
 
-/removeTable: QAL stores the input table to avoid re-accessing the original data from Proteus.
-Calling this request removes buffered tables. No input parameter is required.
+/removeTable: QAL stores the input table to avoid re-accessing the original data from Proteus. Calling this request removes buffered tables. No input parameter is required.
 
-/changeProteus: To execute a query, QAL requires a running Proteus server to fetch the proper
-data. Input parameters are:
+/changeProteus: To execute a query, QAL requires a running Proteus server to fetch the proper data. Input parameters are:
 
    ● url: it is an address to a running Proteus server
    
    ● username: it is a username to the Proteus server
 
+   ● pass: it is a password for the Proteus username
+   
+QAL is implemented in Scala v.2.11.12, and it runs on top of Apache Spark v.2.4.3. The source code is available in SmartDataLake Github repository under the directory named QAL. All functionality is under a single project and has been built and tested using Java JDK v.1.8 and SBT v.1.3.13. The final component is available as a Docker image hosting Spark instance and as a stand-alone jar file. First, we describe how to fetch the source code, install required dependencies, prepare the configuration files, and submit the stand-alone jar file to a running Spark cluster for execution. Then, we present the instructions for running the QAL service inside a Spark Docker image.
 
 ###### Create executable JAR file:
 
