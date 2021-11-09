@@ -117,13 +117,16 @@ COPY QALconf.txt /opt/spark-2.4.4-bin-hadoop2.7/local/
 COPY avatica-1.13.0.jar /opt/spark-2.4.4-bin-hadoop2.7/local/
 
 EXPOSE 4545
+
 CMD ["spark-submit","--class"," mains.SDL", "--master",";spark://spark-master:7077",
 "SDL_QAL_API.jar"]
 
 5) Open a command line in the same directory and run:
 
 docker build -t qal:1.0
+
 6) Deploy the image with:
 
 docker run -d -p 127.0.0.1:4545:4545/tcp qal:1.0
+
 7) Start a Proteus instance and add its credentials via localhost:4545/changeProteus. The QAL REST API is listening on port 4545. Check the service by sending a GET request to localhost:4545/alive
