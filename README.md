@@ -70,6 +70,7 @@ The QAL service requires a running Spark cluster to execute the stand-alone jar 
 “ProteusPassword”: set password for the username,
 }
 4) Make a plain file named Dockerfile containing the code below:
+
 FROM gradiant/spark:latest
 RUN mkdir /opt/spark-2.4.4-bin-hadoop2.7/local/data_csv
 RUN mkdir /opt/spark-2.4.4-bin-hadoop2.7/local/materializedSketches
