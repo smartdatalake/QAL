@@ -9,11 +9,13 @@ query does not contain an approximation rate, then QAL executes the exact versio
 query string is sent via the query parameter inside the request. As the QAL receives a query, it
 contacts the Proteus server to fetch required columns from the target tables, so the tables must be
 accessible from the Proteus instance. The names and definitions of input parameters are:
-● query: it contains the string of the approximate query.
+
+   ● query: it contains the string of the approximate query.
 
 /changeWRSize: QAL stores synopses in the warehouse to use them again. This request sets the
 size of the warehouse in MB. Default is 1000 MB.
-● quota: it indicates the new warehouse size in MB.
+
+   ● quota: it indicates the new warehouse size in MB.
 
 /flushSample: QAL stores synopses in the warehouse to reuse them in next queries execution.
 This request flushes the warehouse and removes synopses. No input parameter is required. No
@@ -24,8 +26,10 @@ Calling this request removes buffered tables. No input parameter is required.
 
 /changeProteus: To execute a query, QAL requires a running Proteus server to fetch the proper
 data. Input parameters are:
-● url: it is an address to a running Proteus server
-● username: it is a username to the Proteus server
+
+   ● url: it is an address to a running Proteus server
+   
+   ● username: it is a username to the Proteus server
 
 
 ###### Create executable JAR file:
