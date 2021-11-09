@@ -58,6 +58,7 @@ The source code is available on the GitHub repository of SmartDataLake. To make 
 “ProteusPassword”: set password for the username,
 
 }
+
 9) Start a Spark cluster and Proteus server having JDBC connection.
 10) In command line do:
 
