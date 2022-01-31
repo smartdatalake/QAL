@@ -1,14 +1,13 @@
 package rules.physical
 
-import definition.Paths.getScalingFactor
 import operators.physical._
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Average, Count, Sum}
-import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, BinaryComparison, Cast, NamedExpression, SpecificInternalRow, UnsafeProjection, UnsafeRow}
-import org.apache.spark.sql.execution.{LogicalRDD, SparkPlan, UnaryExecNode}
+import org.apache.spark.sql.catalyst.expressions.{ And, Attribute, AttributeReference, BinaryComparison, Cast, NamedExpression, SpecificInternalRow, UnsafeProjection, UnsafeRow}
+import org.apache.spark.sql.execution.{LogicalRDD, SparkPlan}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StringType}
 
 import scala.collection.Seq
@@ -280,69 +279,7 @@ abstract class AggreagateSketchExec(confidence: Double, error: Double, seed: Lon
   }
 }
 
-case class ScaleAggregateSampleExec(confidence: Double, error: Double, seed: Long, fraction: Double, resultsExpression: Seq[NamedExpression], child: SparkPlan)
-  extends UnaryExecNode {
 
-  override def output: Seq[Attribute] = child.output
-
-  // override def inputRDDs(): Seq[RDD[InternalRow]] = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].inputRDDs())
-
-  //TODO what is doProduce???
-  //  override protected def doProduce(ctx: CodegenContext): String = childern.flatMap(x=>x.asInstanceOf[CodegenSupport].produce(ctx, this)).reduce(_.toString+_.toString)
-
-  lazy val scalingFactor = getScalingFactor(child)
-
-  //TODO is it ok with changing accuracy
-  override protected def doExecute(): RDD[InternalRow] = {
-    if (isScaled.contains(true))
-      child.execute().map(scale)
-    else
-      child.execute()
-  }
-
-  val isScaled = resultsExpression.map(x => if (x.find(x => x.toString().contains("count(") || x.toString().contains("sum(")).isDefined) true else false).toSeq
-  val types = resultsExpression.map(x => x.toAttribute.dataType)
-
-  def scale(i: InternalRow): InternalRow = {
-    val row = new SpecificInternalRow(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
-    val x = UnsafeProjection.create(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
-    println(scalingFactor)
-    for (index <- 0 to i.numFields - 1) if (isScaled(index))
-      types(index) match {
-        case LongType =>
-          row.update(index, (i.get(index, types(index)).toString.toLong * (scalingFactor)).toLong)
-        case DoubleType =>
-          row.update(index, (i.get(index, types(index)).toString.toDouble * (scalingFactor)).toDouble)
-        case IntegerType =>
-          row.update(index, (i.get(index, types(index)).toString.toInt * (scalingFactor)).toInt)
-        case _ => throw new Exception("Invalid DataType for scaling")
-
-      }
-
-    return x(row)
-    row.update(1, "asd")
-    // row.setDouble(0, percent)
-    //    row.setInt(1, point)
-    //    val x = UnsafeProjection.create(output.map(x => x.asInstanceOf[AttributeReference].dataType).toArray)
-    //    if(percent<100)
-    //       result += x(row)
-    //    percent += (100 / quantilePart)
-    //  }
-    //   SparkContext.getOrCreate().parallelize(result)
-
-    // for (index <- 0 to i.numFields - 1) {
-    //   if ((!resultsExpression(index).isInstanceOf[AttributeReference]) && (resultsExpression(index).children(0).children(0).asInstanceOf[AttributeReference].name.contains("sum")
-    //     || resultsExpression(index).children(0).children(0).asInstanceOf[AttributeReference].name.contains("count"))) {
-    if (i.getString(1).toInt > 0) {
-      i.update(1, (i.getString(1).toInt * (scalingFactor)).toInt)
-      return i
-      //      }
-      //    }
-
-    }
-    i
-  }
-}
 
 
 

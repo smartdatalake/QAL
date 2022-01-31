@@ -415,9 +415,9 @@ abstract class MultiDyadicRangeExec(targetColumn: AttributeReference, confidence
   }
 
   /**
-   * @param in Binary comparison of less greater or equalLess or equalGreater
-   * @return int that obey whether includes equal or not (Dyadic Range obeys close ranges)
-   */
+    * @param in Binary comparison of less greater or equalLess or equalGreater
+    * @return int that obey whether includes equal or not (Dyadic Range obeys close ranges)
+    */
   def getRangeIntValue(in: BinaryComparison): Int = {
     if (in.left.isInstanceOf[Literal])
       if (in.isInstanceOf[GreaterThan])
@@ -542,9 +542,9 @@ case class DyadicRangeExec(targetColumn: AttributeReference, DELTA: Double
   override def toString(): String = Seq("DyadicRange", DELTA, EPS, SEED, edge.name, (if (targetColumn == null) "count" else targetColumn.name)).mkString(delimiterSynopsisFileNameAtt)
 
   /**
-   * @param in Binary comparison of less greater or equalLess or equalGreater
-   * @return int that obey whether includes equal or not (Dyadic Range obeys close ranges)
-   */
+    * @param in Binary comparison of less greater or equalLess or equalGreater
+    * @return int that obey whether includes equal or not (Dyadic Range obeys close ranges)
+    */
   def getRangeIntValue(in: BinaryComparison): Int = {
     if (in.left.isInstanceOf[Literal])
       if (in.isInstanceOf[GreaterThan])

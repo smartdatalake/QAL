@@ -6,7 +6,7 @@ import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, UnaryNode}
 
 case class ApproximateAggregate(confidence: Double, error: Double, seed: Long,
                                 groupingExpressions: Seq[Expression],
-                                aggregateExpressions: Seq[NamedExpression],
+                                aggregateExpressions: Seq[Expression],
                                 output: Seq[Attribute],
                                 child: LogicalPlan)
   extends UnaryNode {
@@ -17,7 +17,7 @@ case class ApproximateAggregate(confidence: Double, error: Double, seed: Long,
 
   override def validConstraints: Set[Expression] = {
     val nonAgg = aggregateExpressions.filter(_.find(_.isInstanceOf[AggregateExpression]).isEmpty)
-    child.constraints.union(getAliasedConstraints(nonAgg))
+    child.constraints.union(getAliasedConstraints(nonAgg.map(_.asInstanceOf[NamedExpression])))
   }
 
   override def toString() = {

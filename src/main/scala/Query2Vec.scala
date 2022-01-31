@@ -1,4 +1,3 @@
-import main.loadTables
 import java.io.{File, FileOutputStream, ObjectOutputStream, PrintWriter}
 import definition.Paths
 import org.apache.spark.sql.SparkSession
@@ -20,12 +19,12 @@ object Query2Vec {
     import sparkSession.implicits._
     SparkSession.setActiveSession(sparkSession)
     sparkSession.sparkContext.setLogLevel("ERROR");
-    loadTables(sparkSession, bench, dataDir)
+    loadTables(sparkSession)
     val queryLog = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "true")
       .option("inferSchema", "true").option("delimiter", ";").option("nullValue", "null").schema(logSchema).load(pathToQueryLog)
     val queriesStatement = queryLog.filter("statement is not null").filter(row => row.getAs[String]("statement").trim.length > 0)
       .sort("clientIP", "yy", "mm", "dd", "hh", "mi", "ss", "seq").select("statement").map(_.getAs[String](0)).collect()
-    val (vectors, accessedColToVectorIndex, groupByKeyToVectorIndex, joinKeyToVectorIndex, accessedColFRQ, groupByFRQ, joinKeyFRQ) = queryToVector(queriesStatement, sparkSession)
+    val (vectors, accessedColToVectorIndex, groupByKeyToVectorIndex, joinKeyToVectorIndex,tableToVectorIndex, accessedColFRQ, groupByFRQ, joinKeyFRQ,tableFRQ,vec2FeatureAndFRQ) = queryToVector(queriesStatement, sparkSession)
     val vectorSize = vectors.size
     var counter = 0
     var writer = new PrintWriter(new File(resultPath))
@@ -36,8 +35,8 @@ object Query2Vec {
       if (vector.equals(pre))
         counter += 1
       else
-        counter = 0
-      if (counter < MAX_NUMBER_OF_QUERY_REPETITION)
+        counter = 1
+      if (counter <= MAX_NUMBER_OF_QUERY_REPETITION)
         writer.println(vector)
       else
         repetitiveCNT += 1
@@ -54,6 +53,9 @@ object Query2Vec {
     oos.close()
     oos = new ObjectOutputStream(new FileOutputStream(resultPath + "_joinKeyToVectorIndex.ser"))
     oos.writeObject(joinKeyToVectorIndex)
+    oos.close()
+    oos = new ObjectOutputStream(new FileOutputStream(resultPath + "_tableToVectorIndex.ser"))
+    oos.writeObject(tableToVectorIndex)
     oos.close()
     writer = new PrintWriter(new File(resultInfoPath))
     writer.println("empty Vectors: " + emptyVectorCNT)

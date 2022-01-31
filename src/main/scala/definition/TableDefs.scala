@@ -290,7 +290,7 @@ object TableDefs {
       val queryOptions = oldQueryName.split("_");
       query = queryOptions(0);
     }
-    println(query);
+    //  println(query);
 
     // ============================================================> STORE_SALES
     if (tpcds_queries_storesales.contains(query)) {
@@ -328,7 +328,7 @@ object TableDefs {
       } else {
         val store_sales = sparkSession.read.parquet(LOCAL_SAMPLE_DIR + "ss_strat_" + percentage + "_" + query + ".parquet");
         sparkSession.sqlContext.createDataFrame(store_sales.rdd, store_sales.schema).createOrReplaceTempView("store_sales");
-        println(store_sales.schema);
+        //  println(store_sales.schema);
       }
     }
 

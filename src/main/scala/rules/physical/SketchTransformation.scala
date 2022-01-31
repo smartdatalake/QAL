@@ -3,7 +3,7 @@ package rules.physical
 import operators.logical.{ApproximateAggregate, Binning, BinningWithoutMinMax, Quantile}
 import operators.physical.{BinningSketchExec, BinningWithoutMaxMinSketchExec, CountMinSketchExec, DyadicRangeExec, ExtAggregateExec, QuantileSketchExec}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Count}
-import org.apache.spark.sql.catalyst.expressions.{Alias, And, AttributeReference, BinaryComparison, BinaryOperator, EqualNullSafe, EqualTo, EquivalentExpressions, Expression, GreaterThan, GreaterThanOrEqual, IsNotNull, IsNull, LessThan, LessThanOrEqual, Literal, NamedExpression, Or, PredicateHelper, PythonUDF, UnaryExpression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, And, AttributeReference, BinaryComparison, BinaryOperator, EqualNullSafe, EqualTo, EquivalentExpressions, Expression, GreaterThan, GreaterThanOrEqual, IsNotNull, IsNull, LessThan, LessThanOrEqual, Literal, NamedExpression, Or, PythonUDF, UnaryExpression}
 import org.apache.spark.sql.catalyst.planning.PhysicalAggregation
 import org.apache.spark.sql.catalyst.plans.logical.{Filter, Join, LeafNode, LogicalPlan, Project}
 import org.apache.spark.sql.execution.aggregate.AggUtils
@@ -15,16 +15,144 @@ import scala.collection.Seq
 import scala.collection.mutable.ListBuffer
 import scala.util.control.Breaks._
 
-object SketchTransformation extends Strategy with PredicateHelper {
+object SketchPhysicalTransformation extends Strategy {
+
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
-    /*    case cms@CountMinSketch(delta, eps, seed, child, outputExpression, condition) =>
-      Seq(CountMinSketchExec(delta, eps, seed, outputExpression, condition, planLater(child)))*/
+    case q@Quantile(quantileCol, quantilePart, confidence, error, seed, child) if child.find(x => x.isInstanceOf[Join]).isEmpty =>
+      Seq(QuantileSketchExec(quantilePart, q.output, DyadicRangeExec(null, confidence, error, seed, null, null, quantileCol, child.find(x => x.isInstanceOf[LogicalRDD]).get.asInstanceOf[LogicalRDD])))
+    case b@Binning(binningCol, binningPart, binningStart, binningEnd, confidence, error, seed, child) if (child.find(x => x.isInstanceOf[Join]).isEmpty) =>
+      Seq(BinningSketchExec(binningPart, binningStart, binningEnd, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child.find(x => x.isInstanceOf[LogicalRDD]).get.asInstanceOf[LogicalRDD])))
+    case b@BinningWithoutMinMax(binningCol, binningPart, confidence, error, seed, child) if (child.find(x => x.isInstanceOf[Join]).isEmpty) =>
+      Seq(BinningWithoutMaxMinSketchExec(binningPart, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child.find(x => x.isInstanceOf[LogicalRDD]).get.asInstanceOf[LogicalRDD])))
+    case ApproximatePhysicalAggregation(confidence, error, seed, hasJoin, groupingExpressions, functionsWithDistinct
+    , functionsWithoutDistinct, resultExpressions, logicalRDD, child) =>
+      if (functionsWithoutDistinct.forall(expr => expr.isInstanceOf[AggregateExpression]) && functionsWithDistinct.size == 0
+        && !groupingExpressions.isEmpty && !hasJoin) {
+        var filterNode = child.find(_.isInstanceOf[Filter])
+
+        //todo multiple sketches
+
+        //make rect as close ranges
+
+        val hyperRects = if (filterNode.isDefined) Seq(Seq(filterNode.get.asInstanceOf[Filter].condition.asInstanceOf[And]))
+        else null
+        //todo asnwer with CMS
+        /*if( hyperRects.forall(x=>x.forall(y=>y.left.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value
+        ==y.right.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value)))
+      print()*/
+        Seq(GroupAggregateSketchExec(confidence, error, seed, groupingExpressions, resultExpressions, functionsWithoutDistinct, hyperRects, logicalRDD))
+      } //todo mdr is slow
+      else if (functionsWithoutDistinct.forall(expr => expr.isInstanceOf[AggregateExpression])
+        && functionsWithDistinct.size == 0 && groupingExpressions.isEmpty && !hasJoin) {
+        var filterNode = child
+        while (!filterNode.isInstanceOf[Filter] && !filterNode.isInstanceOf[LeafNode])
+          filterNode = filterNode.children(0)
+        if (!filterNode.isInstanceOf[Filter]) {
+          NonGroupAggregateSketchExec(confidence, error, seed, resultExpressions, functionsWithoutDistinct, null, logicalRDD)
+        }
+        //make rect as close ranges
+        val hyperRects = combineHyperRectangles(filterNode.asInstanceOf[Filter].condition)
+        //if(hyperRects.forall(x=>x.forall(y=>y.right.asInstanceOf[Literal].value==y.left.asInstanceOf[Literal].value)))
+
+        //physicalPlans++=getPossibleCMSPlan()
+        //val sketches = new ListBuffer[MultiDyadicRangeExec]
+        Seq(NonGroupAggregateSketchExec(confidence, error, seed, resultExpressions, functionsWithoutDistinct, hyperRects, logicalRDD))
+      }
+      else Seq()
+    case PhysicalAggregation(groupingExpressions, aggExpressions, resultExpressions, child)
+      if aggExpressions.forall(expr => expr.isInstanceOf[AggregateExpression]) =>
+      val aggregateExpressions = aggExpressions.map(expr =>
+        expr.asInstanceOf[AggregateExpression])
+
+      val (functionsWithDistinct, functionsWithoutDistinct) =
+        aggregateExpressions.partition(_.isDistinct)
+      if (functionsWithDistinct.map(_.aggregateFunction.children.toSet).distinct.length > 1) {
+        // This is a sanity check. We should not reach here when we have multiple distinct
+        // column sets. Our `RewriteDistinctAggregates` should take care this case.
+        sys.error("You hit a query analyzer bug. Please report your query to " +
+          "Spark user mailing list.")
+      }
+      var physicalPlans = new ListBuffer[SparkPlan]
+      if (groupingExpressions.isEmpty) {
+        for (aggExpression <- aggregateExpressions) {
+          if (!aggExpression.isDistinct && aggExpression.aggregateFunction.isInstanceOf[Count]) {
+            //todo children size ???
+            //todo two filter ???
+            var sketchLogicalRDD = plan.children(0)
+            var sketchCondition: Expression = null
+            val sketchResults = resultExpressions
+            var sketchProjectAtt: NamedExpression = null
+            // todo what if no project
+            while (!sketchLogicalRDD.isInstanceOf[LeafNode] && sketchLogicalRDD != null) {
+              //todo count(*)
+              if (sketchLogicalRDD.isInstanceOf[Project]) {
+                sketchProjectAtt = sketchLogicalRDD.asInstanceOf[Project].projectList.filter(x
+                => x.exprId == aggExpression.aggregateFunction.children(0).asInstanceOf[AttributeReference].exprId)(0)
+              }
+              if (sketchLogicalRDD.isInstanceOf[Filter])
+                sketchCondition = sketchLogicalRDD.asInstanceOf[Filter].condition
+              sketchLogicalRDD = sketchLogicalRDD.children(0)
+            }
+            val possibleSketches = getPossibleSketch(.9, 0.0001, 9223372036854775783L, sketchResults, sketchCondition
+              , sketchProjectAtt, sketchLogicalRDD.asInstanceOf[LogicalRDD])
+            val countMinSketchExec = null //CountMinSketchExec(1E-10, 0.001, 9223372036854775783L, sketchResults, sketchCondition, sketchProjectAtt, sketchLogicalRDD.asInstanceOf[LogicalRDD])
+            if (resultExpressions.size > 1 && sketchResults.size > 0) {
+              val aggregateOperator =
+                if (functionsWithDistinct.isEmpty) {
+                  AggUtils.planAggregateWithoutDistinct(
+                    groupingExpressions,
+                    aggregateExpressions.filter(x => (!x.aggregateFunction.isInstanceOf[Count])),
+                    resultExpressions.filter(_.asInstanceOf[Alias].name.contains("count")),
+                    planLater(child))
+                } else {
+                  AggUtils.planAggregateWithOneDistinct(
+                    groupingExpressions,
+                    functionsWithDistinct,
+                    functionsWithoutDistinct,
+                    //todo ??? what happen when it is distinct count
+                    resultExpressions.filter(_.asInstanceOf[Alias].name.contains("count")),
+                    planLater(child))
+                }
+              physicalPlans += ExtAggregateExec(groupingExpressions, aggregateExpressions, aggregateOperator ++ possibleSketches)
+            }
+            else
+              for (plan <- possibleSketches)
+                physicalPlans += (plan)
+          }
+
+        }
+      }
+
+
+      val aggregateOperator =
+        if (functionsWithDistinct.isEmpty) {
+          AggUtils.planAggregateWithoutDistinct(
+            groupingExpressions,
+            aggregateExpressions,
+            resultExpressions,
+            planLater(child))
+        } else {
+          AggUtils.planAggregateWithOneDistinct(
+            groupingExpressions,
+            functionsWithDistinct,
+            functionsWithoutDistinct,
+            resultExpressions,
+            planLater(child))
+        }
+      // aggregateOperator //++
+      physicalPlans
+    case PhysicalAggregation(groupingExpressions, aggExpressions, resultExpressions, child)
+      if aggExpressions.forall(expr => expr.isInstanceOf[PythonUDF]) =>
+      val udfExpressions = aggExpressions.map(expr => expr.asInstanceOf[PythonUDF])
+      Seq(execution.python.AggregateInPandasExec(
+        groupingExpressions,
+        udfExpressions,
+        resultExpressions,
+        planLater(child)))
     case _ => Nil
   }
 
-}
 
-object SketchPhysicalTransformation extends Strategy {
   def getConditions(expression: Expression): String = {
     val t = expression
     while (t != null) {
@@ -239,163 +367,6 @@ object SketchPhysicalTransformation extends Strategy {
 
   def getPossibleCMSPlan(): TraversableOnce[SparkPlan] = ???
 
-  def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
-    case q@Quantile(quantileCol, quantilePart, confidence, error, seed, child) if (child.find(x => x.isInstanceOf[Join]).isEmpty) =>
-      Seq(QuantileSketchExec(quantilePart, q.output, DyadicRangeExec(null, confidence, error, seed, null, null, quantileCol, child.find(x => x.isInstanceOf[LogicalRDD]).get.asInstanceOf[LogicalRDD])))
-    case q@Quantile(quantileCol, quantilePart, confidence, error, seed, child: LogicalRDD) =>
-      Seq(QuantileSketchExec(quantilePart, q.output, DyadicRangeExec(null, confidence, error, seed, null, null, quantileCol, child)))
-    case b@Binning(binningCol, binningPart, binningStart, binningEnd, confidence, error, seed, child) if (child.find(x => x.isInstanceOf[Join]).isEmpty) =>
-      Seq(BinningSketchExec(binningPart, binningStart, binningEnd, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child.find(x => x.isInstanceOf[LogicalRDD]).get.asInstanceOf[LogicalRDD])))
-    case b@Binning(binningCol, binningPart, binningStart, binningEnd, confidence, error, seed, child: LogicalRDD) =>
-      Seq(BinningSketchExec(binningPart, binningStart, binningEnd, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child)))
-    case b@BinningWithoutMinMax(binningCol, binningPart, confidence, error, seed, child) if (child.find(x => x.isInstanceOf[Join]).isEmpty)  =>
-      Seq(BinningWithoutMaxMinSketchExec(binningPart, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child.find(x => x.isInstanceOf[LogicalRDD]).get.asInstanceOf[LogicalRDD])))
-    case b@BinningWithoutMinMax(binningCol, binningPart, confidence, error, seed, child: LogicalRDD) =>
-      Seq(BinningWithoutMaxMinSketchExec(binningPart, b.output, DyadicRangeExec(null, confidence, error, seed, null, null, binningCol, child)))
-    case ApproximatePhysicalAggregation(confidence, error, seed, hasJoin, groupingExpressions
-    , functionsWithDistinct: Seq[AggregateExpression], functionsWithoutDistinct: Seq[AggregateExpression]
-    , resultExpressions, logicalRDD, child)
-      if functionsWithoutDistinct.forall(expr => expr.isInstanceOf[AggregateExpression])
-        && functionsWithDistinct.size == 0 && !groupingExpressions.isEmpty && !hasJoin =>
-      var physicalPlans = new ListBuffer[SparkPlan]
-      var filterNode = child
-      while (!filterNode.isInstanceOf[Filter] && !filterNode.isInstanceOf[LeafNode])
-        filterNode = filterNode.children(0)
-
-      //todo multiple sketches
-
-      //make rect as close ranges
-
-      val hyperRects = if (filterNode.isInstanceOf[Filter]) Seq(Seq(filterNode.asInstanceOf[Filter].condition.asInstanceOf[And]))
-      else null
-      //todo asnwer with CMS
-      /*if( hyperRects.forall(x=>x.forall(y=>y.left.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value
-        ==y.right.asInstanceOf[BinaryComparison].right.asInstanceOf[Literal].value)))
-      print()*/
-      physicalPlans += GroupAggregateSketchExec(confidence, error, seed, groupingExpressions, resultExpressions, functionsWithoutDistinct, hyperRects, logicalRDD)
-    //todo mdr is slow
-    case ApproximatePhysicalAggregation(confidence, error, seed, hasJoin, groupingExpressions
-    , functionsWithDistinct: Seq[AggregateExpression], functionsWithoutDistinct: Seq[AggregateExpression]
-    , resultExpressions, logicalRDD, child)
-      if functionsWithoutDistinct.forall(expr => expr.isInstanceOf[AggregateExpression])
-        && functionsWithDistinct.size == 0 && groupingExpressions.isEmpty && !hasJoin =>
-      var physicalPlans = new ListBuffer[SparkPlan]
-      var filterNode = child
-      while (!filterNode.isInstanceOf[Filter] && !filterNode.isInstanceOf[LeafNode])
-        filterNode = filterNode.children(0)
-      if (!filterNode.isInstanceOf[Filter]) {
-        NonGroupAggregateSketchExec(confidence, error, seed, resultExpressions, functionsWithoutDistinct, null, logicalRDD)
-      }
-      //make rect as close ranges
-      val hyperRects = combineHyperRectangles(filterNode.asInstanceOf[Filter].condition)
-      //if(hyperRects.forall(x=>x.forall(y=>y.right.asInstanceOf[Literal].value==y.left.asInstanceOf[Literal].value)))
-
-      //physicalPlans++=getPossibleCMSPlan()
-      //val sketches = new ListBuffer[MultiDyadicRangeExec]
-      physicalPlans += NonGroupAggregateSketchExec(confidence, error, seed, resultExpressions, functionsWithoutDistinct, hyperRects, logicalRDD)
-      physicalPlans
-
-    case PhysicalAggregation(groupingExpressions, aggExpressions, resultExpressions, child)
-      if aggExpressions.forall(expr => expr.isInstanceOf[AggregateExpression]) =>
-      val aggregateExpressions = aggExpressions.map(expr =>
-        expr.asInstanceOf[AggregateExpression])
-
-      val (functionsWithDistinct, functionsWithoutDistinct) =
-        aggregateExpressions.partition(_.isDistinct)
-      if (functionsWithDistinct.map(_.aggregateFunction.children.toSet).distinct.length > 1) {
-        // This is a sanity check. We should not reach here when we have multiple distinct
-        // column sets. Our `RewriteDistinctAggregates` should take care this case.
-        sys.error("You hit a query analyzer bug. Please report your query to " +
-          "Spark user mailing list.")
-      }
-      var physicalPlans = new ListBuffer[SparkPlan]
-      if (groupingExpressions.isEmpty) {
-        for (aggExpression <- aggregateExpressions) {
-          if (!aggExpression.isDistinct && aggExpression.aggregateFunction.isInstanceOf[Count]) {
-            //todo children size ???
-            //todo two filter ???
-            var sketchLogicalRDD = plan.children(0)
-            var sketchCondition: Expression = null
-            val sketchResults = resultExpressions
-            var sketchProjectAtt: NamedExpression = null
-            // todo what if no project
-            while (!sketchLogicalRDD.isInstanceOf[LeafNode] && sketchLogicalRDD != null) {
-              //todo count(*)
-              if (sketchLogicalRDD.isInstanceOf[Project]) {
-                sketchProjectAtt = sketchLogicalRDD.asInstanceOf[Project].projectList.filter(x
-                => x.exprId == aggExpression.aggregateFunction.children(0).asInstanceOf[AttributeReference].exprId)(0)
-              }
-              if (sketchLogicalRDD.isInstanceOf[Filter])
-                sketchCondition = sketchLogicalRDD.asInstanceOf[Filter].condition
-              sketchLogicalRDD = sketchLogicalRDD.children(0)
-            }
-            val possibleSketches = getPossibleSketch(.9, 0.0001, 9223372036854775783L, sketchResults, sketchCondition
-              , sketchProjectAtt, sketchLogicalRDD.asInstanceOf[LogicalRDD])
-            val countMinSketchExec = null //CountMinSketchExec(1E-10, 0.001, 9223372036854775783L, sketchResults, sketchCondition, sketchProjectAtt, sketchLogicalRDD.asInstanceOf[LogicalRDD])
-            if (resultExpressions.size > 1 && sketchResults.size > 0) {
-              val aggregateOperator =
-                if (functionsWithDistinct.isEmpty) {
-                  AggUtils.planAggregateWithoutDistinct(
-                    groupingExpressions,
-                    aggregateExpressions.filter(x => (!x.aggregateFunction.isInstanceOf[Count])),
-                    resultExpressions.filter(_.asInstanceOf[Alias].name.contains("count")),
-                    planLater(child))
-                } else {
-                  AggUtils.planAggregateWithOneDistinct(
-                    groupingExpressions,
-                    functionsWithDistinct,
-                    functionsWithoutDistinct,
-                    //todo ??? what happen when it is distinct count
-                    resultExpressions.filter(_.asInstanceOf[Alias].name.contains("count")),
-                    planLater(child))
-                }
-              physicalPlans += ExtAggregateExec(groupingExpressions, aggregateExpressions, aggregateOperator ++ possibleSketches)
-            }
-            else
-              for (plan <- possibleSketches)
-                physicalPlans += (plan)
-          }
-
-        }
-      }
-
-
-      val aggregateOperator =
-        if (functionsWithDistinct.isEmpty) {
-          AggUtils.planAggregateWithoutDistinct(
-            groupingExpressions,
-            aggregateExpressions,
-            resultExpressions,
-            planLater(child))
-        } else {
-          AggUtils.planAggregateWithOneDistinct(
-            groupingExpressions,
-            functionsWithDistinct,
-            functionsWithoutDistinct,
-            resultExpressions,
-            planLater(child))
-        }
-      // aggregateOperator //++
-      physicalPlans
-    case PhysicalAggregation(groupingExpressions, aggExpressions, resultExpressions, child)
-      if aggExpressions.forall(expr => expr.isInstanceOf[PythonUDF]) =>
-      val udfExpressions = aggExpressions.map(expr => expr.asInstanceOf[PythonUDF])
-
-      Seq(execution.python.AggregateInPandasExec(
-        groupingExpressions,
-        udfExpressions,
-        resultExpressions,
-        planLater(child)))
-
-    /*todo
-    case PhysicalAggregation(_, _, _, _) =>
-      // If cannot match the two cases above, then it's an error
-      throw new AnalysisException(
-        "Cannot use a mixture of aggregate function and group aggregate pandas UDF")
-*/
-
-    case _ => Nil
-  }
 
   def getPossibleSketch(DELTA: Double
                         , EPS: Double
@@ -677,7 +648,7 @@ object SketchPhysicalTransformation extends Strategy {
 
 object ApproximatePhysicalAggregation {
   type ReturnType =
-    (Double, Double, Long, Boolean, Seq[NamedExpression], Seq[Expression], Seq[Expression], Seq[NamedExpression], LogicalRDD, LogicalPlan)
+    (Double, Double, Long, Boolean, Seq[NamedExpression], Seq[Expression], Seq[AggregateExpression], Seq[NamedExpression], LogicalRDD, LogicalPlan)
 
   def unapply(a: Any): Option[ReturnType] = a match {
     case ApproximateAggregate(confidence, error, seed, groupingExpressions, aggExpressions, output, child) =>

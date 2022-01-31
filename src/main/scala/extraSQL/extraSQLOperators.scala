@@ -1,6 +1,6 @@
 package extraSQL
 
-import definition.Paths.{ParquetNameToSynopses, SynopsesToParquetName, delimiterParquetColumn, getHeaderOfOutput, lastUsedCounter, lastUsedOfParquetSample, numberOfGeneratedSynopses, parquetNameToHeader, pathToSaveSynopses, sketchesMaterialized, tableName, warehouseParquetNameToSize}
+import definition.Paths.{ParquetNameToSynopses, SynopsesToParquetName, delimiterParquetColumn, folderSize, getHeaderOfOutput, lastUsedCounter, lastUsedOfParquetSample, numberOfGeneratedSynopses, parquetNameToHeader, pathToSaveSynopses, sampleToOutput, sketchesMaterialized, tableName, warehouseParquetNameToSize}
 import operators.logical.{Binning, BinningWithoutMinMax, Quantile, UniformSampleWithoutCI}
 import operators.physical.{DistinctSampleExec2, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
 import org.apache.spark.sql.SparkSession
@@ -10,9 +10,9 @@ import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.exchange.{EnsureRequirements, ReuseExchange}
 import org.apache.spark.sql.execution.{CollapseCodegenStages, LogicalRDD, PlanSubqueries, RDDScanExec, ReuseSubquery, SparkPlan}
 import org.apache.spark.sql.types._
-import rules.physical.ChangeSampleToScan
-
+import rules.physical.{ChangeSampleToScan, SketchPhysicalTransformation}
 import java.io.File
+
 import scala.collection.{Seq, mutable}
 import scala.util.Random
 
@@ -53,7 +53,7 @@ object extraSQLOperators {
     var quantileColAtt: AttributeReference = null
     val scan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
     for (p <- scan.output.toList)
-      if (p.name == quantileCol)
+      if (p.name.toLowerCase == quantileCol)
         quantileColAtt = p.asInstanceOf[AttributeReference]
     var out = "["
     // if (tempQuery.size < 40) {
@@ -78,17 +78,17 @@ object extraSQLOperators {
     // val optimizedPhysicalPlans = sparkSession.sessionState.executePlan(Quantile(quantileColAtt, quantilePart, confidence
     //   , error, seed, plan)).executedPlan
 
-    cheapestPhysicalPlan.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.getDouble(0) + ",\"value\":" + x.getInt(1) + "}," + "\n"))
+    cheapestPhysicalPlan.executeCollectPublic().foreach(x => out += ("{\"percent\":" + x.getDouble(0) + ",\"value\":" + x.get(1) + "}," + "\n"))
     out = out.dropRight(2) + "]"
     println(out)
     out
   }
 
   def execBinning(sparkSession: SparkSession, table: String, binningCol: String, binningPart: Int
-                  , binningStart: Double, binningEnd: Double, confidence: Double, error: Double, seed: Long) = {
-    //sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation)
+                  , binningStart: Double, binningEnd: Double, confidence: Double, error: Double, seed: Long, tempQuery: String) = {
+    sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation)
     var out = "["
-    val scan = sparkSession.sqlContext.sql("select * from " + table).queryExecution.optimizedPlan
+    val scan = sparkSession.sqlContext.sql(tempQuery).queryExecution.optimizedPlan
     var binningColAtt: AttributeReference = null
     for (p <- scan.output.toList)
       if (p.name == binningCol)
@@ -100,7 +100,7 @@ object extraSQLOperators {
       sparkSession.sessionState.planner.plan(ReturnAnswer(Binning(binningColAtt, binningPart, binningStart, binningEnd
         , confidence, error, seed, scan))).toList(0)
     //optimizedPhysicalPlans.executeCollectPublic().foreach(x => out += (x.mkString(";") + "\n"))
-    updateAttributeName(sparkSession.sqlContext.sql("select * from " + table).queryExecution.analyzed, new mutable.HashMap[String, Int]())
+    updateAttributeName(sparkSession.sqlContext.sql(tempQuery).queryExecution.analyzed, new mutable.HashMap[String, Int]())
     var cheapestPhysicalPlan = changeSynopsesWithScan(sparkSession, optimizedPhysicalPlans)
     executeAndStoreSample(sparkSession, cheapestPhysicalPlan)
     cheapestPhysicalPlan = changeSynopsesWithScan(sparkSession, cheapestPhysicalPlan)
@@ -292,27 +292,22 @@ object extraSQLOperators {
           val synopsisInfo = s.toString()
           val name = "sample" + Random.alphanumeric.filter(_.isLetter).take(20).mkString.toLowerCase
           if (s.output.size == 0) {
-            //  println("Errror: {" + s.toString() + "} output of sample is not defined because of projectList==[]")
             return
           }
-          try {
-            //  println(StructType(s.schema.toList.map(x=>new StructField("x",x.dataType,x.nullable,x.metadata))))
-            val dfOfSample = sparkSession.createDataFrame(sparkSession.sparkContext.parallelize(s.executeCollectPublic()), s.schema)
-            dfOfSample.write.format("parquet").save(pathToSaveSynopses + name + ".parquet");
-            dfOfSample.createOrReplaceTempView(name)
-            numberOfGeneratedSynopses += 1
-            warehouseParquetNameToSize.put(name.toLowerCase, folderSize(new File(pathToSaveSynopses + name + ".parquet")) /*view.rdd.count()*view.schema.map(_.dataType.defaultSize).reduce(_+_)*/)
-            ParquetNameToSynopses.put(name, synopsisInfo)
-            SynopsesToParquetName.put(synopsisInfo, name)
-            lastUsedCounter += 1
-            lastUsedOfParquetSample.put(name, lastUsedCounter)
-            parquetNameToHeader.put(name, getHeaderOfOutput(s.output))
-            //  println("stored: " + name + "," + s.toString())
-          }
-          catch {
-            case e: Exception =>
-              System.err.println("Errrror: " + name + "  " + s.toString())
-          }
+          //val converter = CatalystTypeConverters.createToScalaConverter(s.schema)
+          //val dfOfSample = sparkSession.createDataFrame(prepareForExecution(s, sparkSession).execute().map(converter(_).asInstanceOf[Row]), s.schema)
+          //dfOfSample.write.format("parquet").save(pathToSaveSynopses + name + ".parquet");
+          //dfOfSample.createOrReplaceTempView(name)
+          prepareForExecution(sparkSession, s).execute().saveAsObjectFile(pathToSaveSynopses + name + ".obj")
+          numberOfGeneratedSynopses += 1
+          warehouseParquetNameToSize.put(name.toLowerCase, folderSize(new File(pathToSaveSynopses + name + ".obj")) /*view.rdd.count()*view.schema.map(_.dataType.defaultSize).reduce(_+_)*/)
+          ParquetNameToSynopses.put(name, synopsisInfo)
+          SynopsesToParquetName.put(synopsisInfo, name)
+          sampleToOutput.put(name, s.output)
+          lastUsedCounter += 1
+          lastUsedOfParquetSample.put(name, lastUsedCounter)
+          parquetNameToHeader.put(name, getHeaderOfOutput(s.output))
+          println("stored: " + name + "," + s.toString())
         case a =>
           a.children.foreach(x => queue.enqueue(x))
       }
@@ -340,3 +335,32 @@ object extraSQLOperators {
   }
 
 }
+
+
+/*
+*  Random.setSeed(System.nanoTime())
+          val synopsisInfo = s.toString()
+          val name = "sample" + Random.alphanumeric.filter(_.isLetter).take(20).mkString.toLowerCase
+          if (s.output.size == 0) {
+            //  println("Errror: {" + s.toString() + "} output of sample is not defined because of projectList==[]")
+            return
+          }
+          try {
+            //  println(StructType(s.schema.toList.map(x=>new StructField("x",x.dataType,x.nullable,x.metadata))))
+            val dfOfSample = sparkSession.createDataFrame(sparkSession.sparkContext.parallelize(s.executeCollectPublic()), s.schema)
+            dfOfSample.write.format("parquet").save(pathToSaveSynopses + name + ".parquet");
+            dfOfSample.createOrReplaceTempView(name)
+            numberOfGeneratedSynopses += 1
+            warehouseParquetNameToSize.put(name.toLowerCase, folderSize(new File(pathToSaveSynopses + name + ".parquet")) /*view.rdd.count()*view.schema.map(_.dataType.defaultSize).reduce(_+_)*/)
+            ParquetNameToSynopses.put(name, synopsisInfo)
+            SynopsesToParquetName.put(synopsisInfo, name)
+            lastUsedCounter += 1
+            lastUsedOfParquetSample.put(name, lastUsedCounter)
+            parquetNameToHeader.put(name, getHeaderOfOutput(s.output))
+            //  println("stored: " + name + "," + s.toString())
+          }
+          catch {
+            case e: Exception =>
+              System.err.println("Errrror: " + name + "  " + s.toString())
+          }
+* */

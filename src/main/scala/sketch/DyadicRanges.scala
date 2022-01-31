@@ -74,7 +74,6 @@ class DyadicRanges(min: Int, max: Int, delta: Double, epsilon: Double, seed: Lon
     //todo check seeds are the same
     // if (!(this.CmsLvl==that.CmsLvl))
     //    throw new Exception("DyadicRanges are not in the same shape")
-    this
     for (z <- (0 to depth - 1))
       this.CmsLvl(z) += that.CmsLvl(z)
     this.total += that.total

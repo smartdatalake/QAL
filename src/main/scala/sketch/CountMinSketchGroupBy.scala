@@ -6,14 +6,14 @@ import java.util.Base64
 import org.apache.spark.sql.catalyst.expressions.Literal
 
 /**
- * CountMinSketch
- *
- *
- *
- * Example
- * 10**-7, 0.005, 40
- *
- */
+  * CountMinSketch
+  *
+  *
+  *
+  * Example
+  * 10**-7, 0.005, 40
+  *
+  */
 
 
 class CountMinSketchGroupBy(confidence: Double, epsilon: Double, seed: Long) extends Sketch {
@@ -35,11 +35,11 @@ class CountMinSketchGroupBy(confidence: Double, epsilon: Double, seed: Long) ext
   }
 
   /**
-   * get
-   *
-   * @param key value to look up
-   * @return count of key in sketch
-   */
+    * get
+    *
+    * @param key value to look up
+    * @return count of key in sketch
+    */
   def get(key: Int): Int = {
     CMS.get(key)
   }

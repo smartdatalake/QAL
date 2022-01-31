@@ -11,14 +11,14 @@ import scala.util.Random
 
 
 /**
- * CountMinSketch
- *
- *
- *
- * Example
- * 10**-7, 0.005, 40
- *
- */
+  * CountMinSketch
+  *
+  *
+  *
+  * Example
+  * 10**-7, 0.005, 40
+  *
+  */
 
 
 class CountMinSketch(confidence: Double, epsilon: Double, seed: Long) extends Sketch {
@@ -62,11 +62,11 @@ class CountMinSketch(confidence: Double, epsilon: Double, seed: Long) extends Sk
   }
 
   /**
-   * get
-   *
-   * @param key value to look up
-   * @return count of key in sketch
-   */
+    * get
+    *
+    * @param key value to look up
+    * @return count of key in sketch
+    */
   def get(key: Int): Int = {
     var frequency: Int = Int.MaxValue
     var i = 0
@@ -115,12 +115,12 @@ class CountMinSketch(confidence: Double, epsilon: Double, seed: Long) extends Sk
   }
 
   /**
-   * generateHashFunction
-   *
-   * Returns hash function from a family of pairwise-independent hash functions
-   *
-   * @return hash function
-   */
+    * generateHashFunction
+    *
+    * Returns hash function from a family of pairwise-independent hash functions
+    *
+    * @return hash function
+    */
   def generateHashFunction(): Long => Int = {
     val a = math.abs(rand.nextInt())
     val b = math.abs(rand.nextInt())
