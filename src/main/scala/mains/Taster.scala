@@ -3,7 +3,7 @@ package mains
 import costModel.TasterCostModel
 import definition.Paths._
 import rules.logical.{ApproximateInjector, pushFilterUp}
-import rules.physical.SampleTransformationMultiple
+import rules.physical.{SampleTransformation, SampleTransformationMultiple}
 
 import scala.collection.Seq
 
@@ -21,7 +21,7 @@ object Taster extends QueryEngine_Abs("Taster") {
     //  sparkSession.experimental.extraStrategies = Seq(SampleTransformationMultiple)
     //  else
     //  if (isExtended)
-    sparkSession.experimental.extraStrategies = Seq(SampleTransformationMultiple)
+    sparkSession.experimental.extraStrategies = Seq(SampleTransformation)
     // else sparkSession.experimental.extraStrategies = Seq(SampleTransformation)
 
     sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed), new pushFilterUp)
