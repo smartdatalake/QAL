@@ -1,14 +1,14 @@
 import numpy
-from keras.models import model_from_json
-from keras import backend as K
+from tensorflow import keras
+from tensorflow.keras.models import model_from_json
+from tensorflow.keras import backend as K
 import tensorflow as tf
 import re
 import numpy as np
-from keras.preprocessing.text import Tokenizer
+# from keras.preprocessing.text import Tokenizer
 from pandas import DataFrame
 
-threshold = 0.7
-
+threshold = 0.3
 
 
 def binary_r(y_true, y_pred):
@@ -54,7 +54,32 @@ def binary_p(y_true, y_pred):
     return precision
 
 
+def binary_acc1(y_true, y_pred):
+    beta_squared = 1 ** 2  # squaring beta
+    epsilon = 1e-7
+    # casting ytrue and ypred as float dtype
+    ytrue = tf.cast(y_true, tf.float32)
+    ypred = tf.cast(y_pred, tf.float32)
+    # setting values of ypred greater than the set threshold to 1 while those lesser to 0
+    ypred = tf.cast(tf.greater_equal(ypred, tf.constant(threshold)), tf.float32)
 
+    correct = tf.reduce_sum(ytrue * ypred)  # calculating true positives
+    total = tf.reduce_sum(ytrue)
+    return correct / (total + epsilon)
+
+
+def binary_acc2(y_true, y_pred):
+    beta_squared = 1 ** 2  # squaring beta
+    epsilon = 1e-7
+    # casting ytrue and ypred as float dtype
+    ytrue = tf.cast(y_true, tf.int8)
+    ypred = tf.cast(y_pred, tf.float32)
+    # setting values of ypred greater than the set threshold to 1 while those lesser to 0
+    ypred = tf.cast(tf.greater_equal(ypred, tf.constant(threshold)), tf.int8)
+
+    correct = tf.reduce_sum((ytrue | ypred) & ~(ytrue & ypred))  # calculating true positives
+    total = 512
+    return tf.cast(correct, tf.float32) / (512.0 + epsilon)
 
 
 def binary_fbeta(y_true, y_pred):
@@ -406,8 +431,8 @@ def read_process_without_padding(data, windowSize, predictionWindowSize, vecDeli
     a = DataFrame(a)
     for i in range(len(a) - (windowSize + predictionWindowSize - 1)):
         docX.append(a.iloc[i:i + windowSize].values)
-        docY.append(a.iloc[i + windowSize:i + windowSize + predictionWindowSize,258:-5].values.flatten())
-    #docY.append(a.iloc[i + windowSize:i + windowSize + predictionWindowSize].values.flatten())
+        docY.append(a.iloc[i + windowSize:i + windowSize + predictionWindowSize, 258:-5].values.flatten())
+    # docY.append(a.iloc[i + windowSize:i + windowSize + predictionWindowSize].values.flatten())
     return np.array(docX).astype('float32'), np.array(docY).astype('float32')
 
 
@@ -431,12 +456,10 @@ def read_process_with_empty_padding(data, windowSize, predictionWindowSize, vecD
     return np.array(docX).astype('float32'), np.array(docY).astype('float32')
 
 
-def read_process_with_nonempty_padding(data, windowSize, predictionWindowSize, reserved, featureSize=412,
-                                       vecDelimiter=';', processDelimiter='\n'):
-    docX, docY = [], []
-    a = []
+def read(data, windowSize, predictionWindowSize, reserved, featureSize, vecDelimiter=';', processDelimiter='\n'):
+    docX, docY, a = [], [], []
     for line in data.split(processDelimiter):
-        if len(line.split(vecDelimiter)) < windowSize:
+        if len(line.split(vecDelimiter)) < predictionWindowSize:
             continue
         for i in range(0, min(windowSize, reserved)):
             a.append([1 if x == featureSize - i - 1 else 0 for x in range(featureSize)])
@@ -447,11 +470,50 @@ def read_process_with_nonempty_padding(data, windowSize, predictionWindowSize, r
     for i in range(len(a) - (windowSize + predictionWindowSize - 1)):
         if isValid(a.iloc[i + windowSize:i + windowSize + predictionWindowSize].values, featureSize, reserved):
             docX.append(a.iloc[i:i + windowSize].values)
-            docY.append(a.iloc[i + windowSize:i + windowSize + predictionWindowSize,:-reserved].values.flatten())
+            docY.append(a.iloc[i + windowSize:i + windowSize + predictionWindowSize, :-(reserved+14)].values.flatten())
     return np.array(docX).astype('float32'), np.array(docY).astype('float32')
 
-def read_process_with_nonempty_padding2(data, windowSize, predictionWindowSize, reserved, featureSize=412,
+
+def read_process_with_nonempty_padding(data, windowSize, predictionWindowSize, reserved, fullTrain, featureSize=412,
                                        vecDelimiter=';', processDelimiter='\n'):
+    docX, docY = [], []
+    a = []
+
+    if fullTrain:
+        for line in data.split(processDelimiter):
+            # if len(line.split(vecDelimiter)) < windowSize:
+            #    continue
+            for i in range(0, min(windowSize, reserved)):
+                a.append([1 if x == featureSize - i - 1 else 0 for x in range(featureSize)])
+            for vec in line.split(vecDelimiter):
+                if len(vec) > 2:
+                    a.append([int(x) for x in vec])
+            for i in range(0, predictionWindowSize):
+                a.append([0 for x in range(featureSize)])
+        a = DataFrame(a)
+        for i in range(len(a) - (windowSize + predictionWindowSize - 1)):
+            docX.append(a.iloc[i:i + windowSize].values)
+            docY.append(
+                a.iloc[i + windowSize:i + windowSize + predictionWindowSize, :-reserved].values.reverse().flatten())
+    else:
+        for line in data.split(processDelimiter):
+            if len(line.split(vecDelimiter)) < predictionWindowSize:
+                continue
+            for i in range(0, min(windowSize, reserved)):
+                a.append([1 if x == featureSize - i - 1 else 0 for x in range(featureSize)])
+            for vec in line.split(vecDelimiter):
+                if len(vec) > 2:
+                    a.append([int(x) for x in vec])
+        a = DataFrame(a)
+        for i in range(len(a) - (windowSize + predictionWindowSize - 1)):
+            if isValid(a.iloc[i + windowSize:i + windowSize + predictionWindowSize].values, featureSize, reserved):
+                docX.append(a.iloc[i:i + windowSize].values)
+                docY.append(a.iloc[i + windowSize:i + windowSize + predictionWindowSize, :-reserved].values.flatten())
+    return np.array(docX).astype('float32'), np.array(docY).astype('float32')
+
+
+def read_process_with_nonempty_padding2(data, windowSize, predictionWindowSize, reserved, featureSize=412,
+                                        vecDelimiter=';', processDelimiter='\n'):
     docX, docY = [], []
     a = []
     for line in data.split(processDelimiter):
@@ -472,7 +534,7 @@ def read_process_with_nonempty_padding2(data, windowSize, predictionWindowSize, 
 
 def isValid(window, featureSize, reserved=0):
     for vec in window:
-        if not 1 in vec[:featureSize - reserved]:
+        if not 1 in vec[:featureSize - (reserved+14)]:
             return False
     return True
 
