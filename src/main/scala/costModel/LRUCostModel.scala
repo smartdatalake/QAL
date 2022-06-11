@@ -1,17 +1,18 @@
 package costModel
 
-import java.io.File
-
+import costModel.bestSetSelector.LRU
 import definition.Paths._
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.plans.logical.ReturnAnswer
 import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.catalyst.plans.logical.ReturnAnswer
+import java.io.File
 
+import scala.collection.mutable.ListBuffer
 import scala.collection.{Seq, mutable}
 import scala.reflect.io.Directory
 
 class LRUCostModel(sparkSession: SparkSession) extends CostModelAbs {
-  val future = null // ( q1( sub1(app1,app2) , sub2(app1,app2) ),  q2( sub1(app1,app2) , sub2(app1,app2) ) )
+  // val future = null // ( q1( sub1(app1,app2) , sub2(app1,app2) ),  q2( sub1(app1,app2) , sub2(app1,app2) ) )
   var currentSubQueriesAPP: Seq[Seq[SparkPlan]] = null // ( sub1(app1,app2) , sub2(app1,app2) )
   override val setSelectionStrategy = new LRU(this)
 
@@ -55,7 +56,7 @@ class LRUCostModel(sparkSession: SparkSession) extends CostModelAbs {
      })
    }*/
 
-  override def addQuery(query: String, ip: String, epoch: Long, f: Seq[String] = null): Unit = {
+  override def addQuery(query: String, f: Seq[String] = null,futureProjectList:ListBuffer[String]): Unit = {
     currentSubQueriesAPP = getAggSubQueries(sparkSession.sqlContext.sql(query).queryExecution.analyzed).map(subQuery => {
       updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
       val joins = enumerateRawPlanWithJoin(subQuery)
@@ -63,6 +64,9 @@ class LRUCostModel(sparkSession: SparkSession) extends CostModelAbs {
       logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
     })
   }
+
+  override def UpdateWindowHorizon(): Int  =0
+
 
   override def updateWarehouse(): Unit = {
     val (keep, remove) = setSelectionStrategy.decide()

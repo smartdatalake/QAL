@@ -5,6 +5,8 @@ import definition.Paths.{ParquetNameToSynopses, warehouseParquetNameToSize}
 
 import scala.collection.{Seq, mutable}
 
+import scala.collection.mutable
+
 class PriorityQueueTest {
   implicit val ord: Ordering[((String, Long), Long, Boolean)] = Ordering.by(_._2)
 

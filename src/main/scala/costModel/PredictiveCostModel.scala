@@ -1,27 +1,24 @@
 package costModel
 
-import java.io.File
-import java.util
-
-import definition.Paths
-import definition.Paths.{ParquetNameToSynopses, SynopsesToParquetName, extractAccessedColumn, getGroupByKeys, getTables, pathToSaveSynopses, updateAttributeName, warehouseParquetNameToSize, windowSize, _}
-import operators.physical.{SampleExec, UniformSampleExec2, UniversalSampleExec2}
+import costModel.bestSetSelector.{CELF, LRU}
+import definition.Paths.{ParquetNameToSynopses, SynopsesToParquetName, delimiterHashMap, getAggSubQueries, pathToSaveSynopses, reserveFeature, updateAttributeName, warehouseParquetNameToSize, windowSize}
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.expressions.AttributeReference
-import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, ReturnAnswer}
+import org.apache.spark.sql.catalyst.plans.logical.ReturnAnswer
 import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
+import definition.Paths._
+import java.io.File
+import mains.Adaptive.ExtendProject
+import operators.physical.{SampleExec, UniformSampleExec2, UniversalSampleExec2}
+import org.apache.spark.sql.catalyst.expressions.AttributeReference
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHashJoinExec, SortMergeJoinExec}
-
 import scala.collection.immutable.ListSet
-import scala.collection.mutable.{HashMap, ListBuffer}
-import scala.collection.{Seq, mutable}
+import scala.collection.mutable.ListBuffer
 import scala.io.Source
+import scala.collection.{Seq, mutable}
 import scala.reflect.io.Directory
 
-class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: Boolean) extends CostModelAbs {
-  val future = new mutable.Queue[Seq[Seq[SparkPlan]]]() // ( q1( sub1(app1,app2) , sub2(app1,app2) ),  q2( sub1(app1,app2) , sub2(app1,app2) ) )
-  val past = new mutable.HashMap[String, mutable.Queue[(Long, Seq[Seq[SparkPlan]], LogicalPlan, String)]]() // ( ip1:( q1:( sub1:(app1,app2) , sub2:(app1,app2) ),  q2:( sub1:(app1,app2) , sub2:(app1,app2) ) ) )
-  var currentExact: Seq[Seq[SparkPlan]] = null
+class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: Boolean, isAdaptive: Boolean) extends CostModelAbs {
   var currentSubQueriesAPP: Seq[Seq[SparkPlan]] = null
   var currentQuery: LogicalPlan = null
   var currentQueryVector = ""
@@ -50,20 +47,16 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
 
   override def getFutureProjectList(): Seq[String] = futureProjectList
 
-  def getPrediction(vec: String): String = scala.io.Source.fromURL(url + vec).mkString
+  def getPrediction(vec: String): Unit = null //nextQueryVector = scala.io.Source.fromURL(url + vec + "X" + 0).mkString //
 
-  def getFuture = (past.map(_._1) ++ Seq(currentIp)).toSet.flatMap(getFutureForAtiveSession).toList.sortBy(_._2).map(_._1)
+  //def getFuture = (past.map(_._1) ++ Seq(currentIp)).toSet.flatMap(getFutureForAtiveSession).toList.sortBy(_._2).map(_._1)
 
   def getPredictedQuerySubPlanApp(vecs: String) = {
-    X(vecs.grouped(featureCNT ).toList.map(vectorToLogicalPlan2).filter(_ != null)).flatten(x => x._1.map(y => (y, x._2))).map(Query => ( {
-      updateAttributeName(Query._1, new mutable.HashMap[String, Int]())
-      val joins = enumerateRawPlanWithJoin(Query._1)
-      val logicalPlans = joins.map(x => sparkSession.sessionState.optimizer.execute(x))
-      Seq(logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x))))
-    }, Query._2))
+
+    X(vecs.grouped(featureCNT - reserveFeature).toList.flatMap(vectorToQueryString))
   }
 
-  def X(s: Seq[(Seq[LogicalPlan], Int)]): Seq[(Seq[LogicalPlan], Int)] = {
+  def X(s: Seq[(String, Int)]): Seq[(String, Int)] = {
     if (s.size == 0)
       return s
     var y = s.map(_._2).toList
@@ -76,22 +69,13 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
 
   }
 
-
-  def getFutureForAtiveSession(ip: String): Seq[(Seq[Seq[SparkPlan]], Int)] = {
-    //  if (ip.equals(currentIp)) {
-    //    val pastQuery = past.get(ip)
-    //    if (pastQuery.isDefined)
-    //      getPredictedQuerySubPlanApp(getPrediction(pastQuery.get.map(_._4).mkString(delimiterVector) + delimiterVector + currentQueryVector))
-    //    else
-    //       getPredictedQuerySubPlanApp(getPrediction(currentQueryVector))
-    //  }
-    //   else {
-    val pastQuery = past.get(ip)
-    if (pastQuery.isDefined)
-      getPredictedQuerySubPlanApp(getPrediction(pastQuery.get.map(_._4).mkString(delimiterVector)))
-    else Seq()
-    //   }
-  }
+  /*  def getFutureForAtiveSession(ip: String): Seq[(String, Int)] = {
+      val pastQuery = past.get(ip)
+      if (pastQuery.isDefined)
+        getPredictedQuerySubPlanApp(nextQueryVector)
+      else Seq()
+      //   }
+    }*/
 
   /*
     def calRewardOf(A: Seq[(String, Long)]): Double = {
@@ -106,32 +90,23 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
       getCheapestExactCostOf(prediction, app) - (costOfAppPlan(app, getWRSynopsesSize.toSeq)._2 + (if (prediction.size == 0) 0 else prediction.map(query => query.map(subQuery => subQuery.map(APP => costOfAppPlan(APP, synopsesOfApp)._2).min).reduce(_ + _)).reduce(_ + _)))
     }
   */
-  var prediction: Seq[Seq[Seq[SparkPlan]]] = null
 
   def calRewardOf3(app: SparkPlan): Double = {
-
     val synopsesOfApp = extractSynopses(app).map(y => (y.toString(), synopsesSize.getOrElse(y.toString(), costOfAppPlan(y, getWRSynopsesSize.toSeq)._1)))
     if (synopsesOfApp.size == 0)
-      return costOfAppPlan(app, getWRSynopsesSize.toSeq)._2 + (if (prediction.size == 0) 0 else prediction.map(query => query.map(subQuery => subQuery.map(APP => costOfExact(APP)._2).min).reduce(_ + _)).reduce(_ + _))
+      return costOfAppPlan(app, getWRSynopsesSize.toSeq)._2 + (if (future.size == 0) 0 else future.map(query => query.map(subQuery => subQuery.map(APP => costOfExact(APP)._2).min).reduce(_ + _)).reduce(_ + _))
     if (synopsesOfApp.reduce((a, b) => ("", a._2 + b._2))._2 > maxSpace) {
       // synopsesOfApp.foreach(println)
       //   println("-----")
       return Double.MaxValue
     }
-    (costOfAppPlan(app, getWRSynopsesSize.toSeq)._2 + (if (prediction.size == 0) 0 else prediction.map(query => query.map(subQuery => subQuery.map(APP => costOfAppWithFixedSynopses(APP, synopsesOfApp)._2).min).reduce(_ + _)).reduce(_ + _)))
+    (costOfAppPlan(app, getWRSynopsesSize.toSeq)._2 + (if (future.size == 0) 0 else future.map(query => query.map(subQuery => subQuery.map(APP => costOfAppWithFixedSynopses(APP, synopsesOfApp)._2).min).reduce(_ + _)).reduce(_ + _)))
   }
 
-
-  // cheapestExact(P+Can_app)- { Exec(Can_app,WR) + Exec_min( P , S(Can_app) ) }
-
   override def suggest(): Seq[SparkPlan] = {
-    //println("--------------------------------------------------------------------------")
-    //currentSubQueriesAPP.map(subQueryAPPs => subQueryAPPs.foreach(pp => println(toStringTree(pp))))
-    //println("--------------------------------------------------------------------------")
-    // prediction.foreach(println)
     val warehouse = warehouseParquetNameToSize.map(x => ParquetNameToSynopses(x._1)).toSeq
     val temp = currentSubQueriesAPP.map(apps => apps.find(app => AreCovered(extractSynopses(app).map(_.asInstanceOf[SampleExec]), warehouse)))
-    if(temp.map(_.isDefined).reduce(_&&_))
+    if (temp.map(_.isDefined).reduce(_ && _))
       return temp.map(_.get)
     (currentSubQueriesAPP).map(subQueryAPPs => {
       //println("---")
@@ -143,74 +118,19 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
     })
   }
 
-  /*def calRewardOfGain(app: SparkPlan, windowSize: Int): Double = {
-    val synopsesOfApp = extractSynopses(app).map(y => (y.toString(), costOfAppPlan(y, getWRSynopsesSize.toSeq)._1))
-    if (synopsesOfApp.size == 0)
-      return 1.0
-    if(synopsesOfApp.reduce((a,b)=>("",a._2+b._2))._2>maxSpace)
-      return -1
-    if(prediction.size==0)
-      return 0
-    prediction.map(subQueries => subQueries.map(pps => {
-      pps.map(costOfExact).minBy(_._2)._2 - pps.map(pp => costOfAppWithFixedSynopses(pp, synopsesOfApp)).minBy(_._2)._2
-    }).reduce(_ + _)).reduce(_ + _)
-  }
-
-  // cheapestExact(F+Can_app)- { Exec(Can_app,WR) + Exec_min( F , S(Can_app) ) }
-
-  override def suggest(): Seq[SparkPlan] = {
-    //println("--------------------------------------------------------------------------")
-    //currentSubQueriesAPP.map(subQueryAPPs => subQueryAPPs.foreach(pp => println(toStringTree(pp))))
-    //println("--------------------------------------------------------------------------")
-
-    currentSubQueriesAPP.map(subQueryAPPs => {
-      subQueryAPPs.map(pp => {
-        //  println(toStringTree(pp))
-        //   println(calRewardOfGain(pp, windowSize))
-        (pp, calRewardOfGain(pp, windowSize)) /*calRewardOf(extractSynopses(pp).map(y => (y.toString(), costOfAppPlan(y, Seq())._1))))*/
-      }).maxBy(_._2)._1
-    })
-  }
-  */
-  /*override def suggest(): Seq[SparkPlan] = {
-    currentSubQueriesAPP.map(subQueryAPPs => {
-      subQueryAPPs.map(pp => {
-        (pp, calRewardOf(extractSynopses(pp).map(y => (y.toString(), costOfAppPlan(y, Seq())._1))))
-      }).maxBy(_._2)._1
-    })
-  }*/
-
-  override def addQuery(query: String, ip: String, epoch: Long, f: Seq[String]): Unit = {
-    epochCurrentQuery = epoch
-    currentIp = ip
-    currentQuery = sparkSession.sqlContext.sql(query).queryExecution.analyzed
-    var tt: Long = 0
-
-    val x = past.get(ip)
-    if (!x.isDefined)
-      past.put(ip, new mutable.Queue[(Long, Seq[Seq[SparkPlan]], LogicalPlan, String)]())
-    else if (x.get.last._1 + gap < epochCurrentQuery)
-      past.get(ip).get.clear()
-    if (past.get(ip).get.size > 0)
-      tt = epoch - past.get(ip).get.last._1
-    past.get(ip).get.enqueue((epoch, currentSubQueriesAPP, currentQuery, queryToFeatureVector(currentQuery, tt.toInt)))
-
-    removeOldProcesses()
-    val ipQueryCount = past.getOrElse(ip, Seq()).size
-    //  println(past.map(_._1))
-    if (ipQueryCount > windowSize)
-      past.get(ip).get.dequeue()
-    prediction = getFuture.filter(x => x(0).size > 0) //++ p //++past.map(x=>x._2.head)
-
-    //  past.foreach(println)
-    val j = getJoinKeys()
-
-    // currentQueryVector = queryToFeatureVector(currentQuery)
-    currentSubQueriesAPP = getAggSubQueries(currentQuery).map(subQuery => {
+  override def addQuery(query: String, f: Seq[String], futureProjectList: ListBuffer[String]): Unit = {
+    future = f.map(query => getAggSubQueries(sparkSession.sqlContext.sql(query).queryExecution.analyzed).map(subQuery => {
       updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
       val joins = enumerateRawPlanWithJoin(subQuery)
       val logicalPlans = joins.map(x => sparkSession.sessionState.optimizer.execute(x))
-      val apps = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)).map(x => ExtendProject(x, getFutureProjectList)).flatMap(p => {
+      logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
+    })).filter(_ (0).size > 0)
+    val j = getJoinKeys()
+    currentSubQueriesAPP = getAggSubQueries(sparkSession.sqlContext.sql(query).queryExecution.analyzed).map(subQuery => {
+      updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
+      val joins = enumerateRawPlanWithJoin(subQuery)
+      val logicalPlans = joins.map(x => sparkSession.sessionState.optimizer.execute(x))
+      val apps = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)).map(x => ExtendProject(x, futureProjectList)).flatMap(p => {
         if (p.find(x => x.isInstanceOf[UniformSampleExec2]).isDefined) {
           val pp = p.find(x => x.isInstanceOf[UniformSampleExec2]).get.asInstanceOf[UniformSampleExec2]
           if (pp.joins == "_") {
@@ -227,7 +147,7 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
         }
         else
           Seq(p)
-      }))
+      })) ++ logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
       val temp = sparkSession.experimental.extraOptimizations
       sparkSession.experimental.extraOptimizations = Seq()
       val exact = sparkSession.sessionState.planner.plan(ReturnAnswer(sparkSession.sessionState.optimizer.execute(subQuery)))
@@ -237,25 +157,10 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
       else
         apps ++ exact
     })
-  /*  currentSubQueriesAPP = getAggSubQueries(currentQuery).map(subQuery => {
-      updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
-      val joins = enumerateRawPlanWithJoin(subQuery)
-      val logicalPlans = joins.map(x => sparkSession.sessionState.optimizer.execute(x))
-      val apps = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
-      val temp = sparkSession.experimental.extraOptimizations
-      sparkSession.experimental.extraOptimizations = Seq()
-      val exact = sparkSession.sessionState.planner.plan(ReturnAnswer(sparkSession.sessionState.optimizer.execute(subQuery)))
-      sparkSession.experimental.extraOptimizations = temp
-      if (justAPP)
-        apps
-      else
-        apps ++ exact
-    })*/
-    // futureProjectList.clear()
-    //prediction.foreach(x=>x.foreach(println))
+    past.+=(currentSubQueriesAPP)
   }
 
-  def getJoinKeys(): Seq[AttributeReference] = prediction.flatMap(
+  def getJoinKeys(): Seq[AttributeReference] = future.flatMap(
     subQueries => subQueries.flatMap(subQueryPPs => subQueryPPs(0).flatMap(node => {
       if (node.isInstanceOf[ShuffledHashJoinExec])
         Seq(definition.Paths.getAttRefFromExp(node.asInstanceOf[ShuffledHashJoinExec].leftKeys(0))(0), definition.Paths.getAttRefFromExp(node.asInstanceOf[ShuffledHashJoinExec].rightKeys(0))(0))
@@ -266,12 +171,11 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
       else Seq()
     }))).distinct
 
-
   override def updateWarehouse(): Unit = {
     val (keep, remove) = setSelectionStrategy.decide()
     if (remove.size == 0)
       return
-    keep.foreach(println)
+    //keep.foreach(println)
 
     remove.foreach(x => {
       val parquetName = SynopsesToParquetName.getOrElse(x, "null")
@@ -288,10 +192,127 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
     })
   }
 
+  def vectorToQueryString(vec: String): Seq[(String, Int)] = {
+    var accessCols = new ListBuffer[String]()
+    var groupBy = new ListBuffer[String]()
+    var joinKey = new ListBuffer[String]()
+    val queries = new ListBuffer[String]()
+    var tables = new ListBuffer[String]()
+    var arrivalRate = 0
+    var flag = true
+    val bits = vec.split("")
+    var query = "Select "
+    for (index <- (0 to vectorSize - 1)) if (bits(index) == "1") {
+      if (accessColIndexRange._1 <= index && index <= accessColIndexRange._2) {
+        val ac = indexToAccessedCol.get(index).get
+        accessCols.+=(ac)
+        val x = ac.split("\\.")
+        futureProjectList.+=(x(0) + "_1." + x(1))
+      }
+      else if (groupByIndexRange._1 <= index && index <= groupByIndexRange._2) {
+        groupBy.+=(indexToGroupByKey.get(index).get)
+      }
+      else if (joinKeyIndexRange._1 <= index && index <= joinKeyIndexRange._2) {
+        joinKey.+=(indexToJoinKey.get(index).get)
+      }
+      else if (tableIndexRange._1 <= index && index <= tableIndexRange._2) {
+        tables.+=(indexToTable.get(index).get)
+      }
+      else if (tableIndexRange._2 < index && index <= tableIndexRange._2 + timeBucket) {
+        val iii = index - tableIndexRange._2
+        /*iii match {
+          case 1 => arrivalRate = 90
+          case 2 => arrivalRate = 270
+          case 3 => arrivalRate = 450
+          case 4 => arrivalRate = 630
+          case 5 => arrivalRate = 810
+          case 6 => arrivalRate = 990
+          case 7 => arrivalRate = 1170
+          case 8 => arrivalRate = 1350
+          case 9 => arrivalRate = 1530
+        }*/
+        if (flag)
+          (iii) match {
+            case 1 => arrivalRate = 0
+            case 2 => arrivalRate = 1
+            case 3 => arrivalRate = 2
+            case 4 => arrivalRate = 4
+            case 5 => arrivalRate = 7
+            case 6 => arrivalRate = 10
+            case 7 => arrivalRate = 13
+            case 8 => arrivalRate = 21
+            case 9 => arrivalRate = 40
+            case 10 => arrivalRate = 78
+            case 11 => arrivalRate = 150
+            case 12 => arrivalRate = 300
+            case 13 => arrivalRate = 600
+            case 14 => arrivalRate = 1100
+            case _ => throw new Exception("invalid vector index")
+          }
+        flag = false
+      }
+      else throw new Exception("Index is not in range of vector information")
+    }
+    if (accessCols.size == 0 && tables.size == 0)
+      return null
+
+    if (joinKey.size == 0) {
+      if (groupBy.size > 0) {
+        val t = groupBy.map(_.split("\\.")(0)).toSet
+        for (x <- t)
+          queries.+=("select count(*) from " + x + " group by " + groupBy.filter(v => v.split("\\.")(0).equals(x)).mkString(","))
+      }
+      else {
+        if (tables.size > 0)
+          queries += ("select count(*) from " + tables(0))
+      }
+    }
+    else if (joinKey.size == 1) {
+      val tt = joinKey(0).split("=").map(_.split("\\.")(0)).distinct
+      if (groupBy.filter(v => tt.contains(v.split("\\.")(0))).size == 0)
+        queries.+=("select count(*) from " + tt.mkString(",") + " where " + joinKey(0) + " ")
+      else
+        queries.+=("select count(*) from " + tt.mkString(",") + " where " + joinKey(0) + " group by " + groupBy.filter(v => tt.contains(v.split("\\.")(0))).mkString(","))
+    }
+    else if (joinKey.size == 2) {
+      val t = joinKey(0).split("=").map(_.split("\\.")(0)).distinct
+      var tt = joinKey(1).split("=").map(_.split("\\.")(0)).distinct
+      if (t.intersect(tt).size == 0) {
+        if (groupBy.filter(v => t.contains(v.split("\\.")(0))).size == 0)
+          queries.+=("select count(*) from " + t.mkString(",") + " where " + joinKey(0) + " ")
+        else
+          queries.+=("select count(*) from " + t.mkString(",") + " where " + joinKey(0) + " group by " + groupBy.filter(v => t.contains(v.split("\\.")(0))).mkString(","))
+        if (groupBy.filter(v => tt.contains(v.split("\\.")(0))).size == 0)
+          queries.+=("select count(*) from " + tt.mkString(",") + " where " + joinKey(1) + " ")
+        else
+          queries.+=("select count(*) from " + tt.mkString(",") + " where " + joinKey(1) + " group by " + groupBy.filter(v => tt.contains(v.split("\\.")(0))).mkString(","))
+      }
+      else {
+        tt = (t ++ tt).distinct
+        if (groupBy.filter(v => tt.contains(v.split("\\.")(0))).size == 0)
+          queries.+=("select count(*) from " + tt.mkString(",") + " where " + joinKey.mkString(" and ") + " ")
+        else
+          queries.+=("select count(*) from " + tt.mkString(",") + " where " + joinKey.mkString(" and ") + " group by " + groupBy.filter(v => tt.contains(v.split("\\.")(0))).mkString(","))
+      }
+    }
+    else {
+      val tables = joinKey.flatMap(_.split("=")).map(_.split("\\.")(0)).toSet
+      if (groupBy.filter(v => tables.contains(v.split("\\.")(0))).size == 0)
+        queries.+=("select count(*) from " + tables.mkString(",") + " where " + joinKey.mkString(" and ") + " ")
+      else
+        queries.+=("select count(*) from " + tables.mkString(",") + " where " + joinKey.mkString(" and ") + " group by " + groupBy.filter(v => tables.contains(v.split("\\.")(0))).mkString(","))
+    }
+    queries.foreach(println)
+    println(arrivalRate)
+    println(".......")
+
+    if (queries.size == 0)
+      return null
+    queries.map(x => (x, arrivalRate))
+  }
 
   def vectorToLogicalPlan2(vec: String): (Seq[LogicalPlan], Int) = {
     var accessCols = new ListBuffer[String]()
-    // var accessCols2 = ""
     var groupBy = new ListBuffer[String]()
     var joinKey = new ListBuffer[String]()
     val queries = new ListBuffer[String]()
@@ -435,7 +456,7 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
       if (accessColIndexRange._1 <= index && index <= accessColIndexRange._2) {
         accessCols += "count(" + indexToAccessedCol.get(index).get + "),"
         accessCols2 += indexToAccessedCol.get(index).get.split("\\.")(0) + ","
-        futureProjectList.+=(indexToAccessedCol.get(index).get)
+        //futureProjectList.+=(indexToAccessedCol.get(index).get)
       }
       else if (groupByIndexRange._1 <= index && index <= groupByIndexRange._2) {
         groupBy += indexToGroupByKey.get(index).get + ","
@@ -478,7 +499,6 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
     sparkSession.sql(query).queryExecution.analyzed
   }
 
-
   def readVectorInfo(): Unit = {
     var lines = Source.fromFile(pathToML_Info + tag + "_colIndex").getLines
     while (lines.hasNext) {
@@ -508,71 +528,58 @@ class PredictiveCostModel(sparkSession: SparkSession, isLRU: Boolean, justAPP: B
     vectorSize += (1 + timeBucket)
   }
 
+  override def getFutureAPP(): Seq[Seq[Seq[SparkPlan]]] = future
 
-  override def getFutureAPP(): Seq[Seq[Seq[SparkPlan]]] = prediction
+  override def getFutureSize(): Long = future.size
 
-  override def getFutureSize(): Long = prediction.size
+  /*  def processToFeatureVector(ip: String): Seq[String] = {
+      val process = past.get(ip).get.sortBy(_._1)
+      val tableName: HashMap[String, String] = new HashMap()
+      val res = new ListBuffer[String]()
+      for (query <- process) {
+        val lp = query._3
+        tableName.clear()
+        updateAttributeName2(lp, tableName)
+        val accessedColsSet = new mutable.HashSet[String]()
+        extractAccessedColumn(lp, accessedColsSet)
+        val accessedCols = accessedColsSet.toSeq.distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
+        val joinKeys = Paths.getJoinConditions(lp).distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
+        val groupByKeys = getGroupByKeys(lp).distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
+        val tables = getTables(lp).distinct.sortBy(_.toString)
+        val vector = new Array[Int](vectorSize + reserveFeature)
+        util.Arrays.fill(vector, 0)
+        for (accCol <- accessedCols) if (accessedColToVectorIndex.get(accCol).isDefined)
+          vector(accessedColToVectorIndex.get(accCol).get) = 1
+        for (groupCol <- groupByKeys) if (groupByKeyToVectorIndex.get(groupCol).isDefined)
+          vector(groupByKeyToVectorIndex.get(groupCol).get) = 1
+        for (joinCol <- joinKeys) if (joinKeyToVectorIndex.get(joinCol).isDefined)
+          vector(joinKeyToVectorIndex.get(joinCol).get) = 1
+        for (table <- tables) if (tableToVectorIndex.get(table).isDefined)
+          vector(tableToVectorIndex.get(table).get) = 1
+        vector.mkString("")
+        res += (vector.mkString(""))
+      }
+      res.toSeq
+    }*/
 
-
-  def removeOldProcesses(): Unit =
-    for (ip <- past)
-      if (ip._2.last._1 + gap < epochCurrentQuery)
-        past.remove(ip._1)
-
-
-  def queryToFeatureVector(lpp: LogicalPlan, gap: Int): String = {
-    val tableName: HashMap[String, String] = new HashMap()
-    tableName.clear()
-    updateAttributeName2(lpp, tableName)
-    getAggSubQueries(lpp).map(lp => {
-      val aggregateCol = Paths.getAggregateColumns(lp)
-      val joinKeys = Paths.getJoinConditions(lp).distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
-      val groupByKeys = getGroupByKeys(lp).distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
-      val tables = getTables(lp).distinct.sortBy(_.toString)
-      val vector = new Array[Int](vectorSize + reserveFeature)
-      util.Arrays.fill(vector, 0)
-      for (accCol <- aggregateCol) if (accessedColToVectorIndex.get(accCol).isDefined)
-        vector(accessedColToVectorIndex.get(accCol).get) = 1
-      for (groupCol <- groupByKeys) if (groupByKeyToVectorIndex.get(groupCol).isDefined)
-        vector(groupByKeyToVectorIndex.get(groupCol).get) = 1
-      for (joinCol <- joinKeys) if (joinKeyToVectorIndex.get(joinCol).isDefined)
-        vector(joinKeyToVectorIndex.get(joinCol).get) = 1
-      for (table <- tables) if (tableToVectorIndex.get(table).isDefined)
-        vector(tableToVectorIndex.get(table).get) = 1
-      if (timeBucket > 0)
-        vector(tableIndexRange._2 + gabToIndex(gap) + 1) = 1
-      vector.mkString("")
-    }).mkString(";")
+  def UpdateWindowHorizon(): Int = {
+    println("WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW" + windowSize)
+    val synopsesForWmm = GetBestSynopses(3)
+    val synopsesForWm = GetBestSynopses(5)
+    val synopsesForW = GetBestSynopses(10)
+    val synopsesForWp = GetBestSynopses(15)
+    val timeWmm = calMinExecutionTimeBetweenTwoInvocations(synopsesForWmm)
+    val timeWm = calMinExecutionTimeBetweenTwoInvocations(synopsesForWm)
+    val timeW = calMinExecutionTimeBetweenTwoInvocations(synopsesForW)
+    val timeWp = calMinExecutionTimeBetweenTwoInvocations(synopsesForWp)
+    if (timeWmm < timeW && timeWmm < timeWp && timeWmm < timeWm)
+      3
+    else if (timeWm < timeW && timeWm < timeWp && timeWm < timeWmm)
+      5
+    else if (timeWp < timeW && timeWp < timeWm && timeWp < timeWmm)
+      15
+    else
+      10
   }
 
-
-  def processToFeatureVector(ip: String): Seq[String] = {
-    val process = past.get(ip).get.sortBy(_._1)
-    val tableName: HashMap[String, String] = new HashMap()
-    val res = new ListBuffer[String]()
-    for (query <- process) {
-      val lp = query._3
-      tableName.clear()
-      updateAttributeName2(lp, tableName)
-      val accessedColsSet = new mutable.HashSet[String]()
-      extractAccessedColumn(lp, accessedColsSet)
-      val accessedCols = accessedColsSet.toSeq.distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
-      val joinKeys = Paths.getJoinConditions(lp).distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
-      val groupByKeys = getGroupByKeys(lp).distinct.sortBy(_.toString).filter(!_.contains("userDefinedColumn"))
-      val tables = getTables(lp).distinct.sortBy(_.toString)
-      val vector = new Array[Int](vectorSize + reserveFeature)
-      util.Arrays.fill(vector, 0)
-      for (accCol <- accessedCols) if (accessedColToVectorIndex.get(accCol).isDefined)
-        vector(accessedColToVectorIndex.get(accCol).get) = 1
-      for (groupCol <- groupByKeys) if (groupByKeyToVectorIndex.get(groupCol).isDefined)
-        vector(groupByKeyToVectorIndex.get(groupCol).get) = 1
-      for (joinCol <- joinKeys) if (joinKeyToVectorIndex.get(joinCol).isDefined)
-        vector(joinKeyToVectorIndex.get(joinCol).get) = 1
-      for (table <- tables) if (tableToVectorIndex.get(table).isDefined)
-        vector(tableToVectorIndex.get(table).get) = 1
-      vector.mkString("")
-      res += (vector.mkString(""))
-    }
-    res.toSeq
-  }
 }

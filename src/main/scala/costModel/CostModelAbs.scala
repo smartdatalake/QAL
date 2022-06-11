@@ -1,26 +1,29 @@
 package costModel
 
+import costModel.bestSetSelector.BestSetSelectorAbs
 import definition.Paths
-import definition.Paths.{delimiterParquetColumn, delimiterSynopsesColumnName, delimiterSynopsisFileNameAtt, getAccessedColsOfExpressions, getHeaderOfOutput, mapRDDScanRowCNT, tableName, _}
-import operators.physical._
-import org.apache.spark.sql.catalyst.AliasIdentifier
-import org.apache.spark.sql.catalyst.analysis._
-import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, _}
-import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
-import org.apache.spark.sql.catalyst.plans.JoinType
-import org.apache.spark.sql.catalyst.plans.logical._
-import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, SortAggregateExec}
-import org.apache.spark.sql.execution.exchange.{Exchange, ShuffleExchangeExec}
-import org.apache.spark.sql.execution.joins.SortMergeJoinExec
+import definition.Paths._
+import definition.Paths.{delimiterParquetColumn, delimiterSynopsesColumnName, delimiterSynopsisFileNameAtt, getAccessedColsOfExpressions, getHeaderOfOutput, mapRDDScanRowCNT, tableName}
+import org.apache.spark.sql.catalyst.expressions.AttributeReference
 import org.apache.spark.sql.execution.{SampleExec => _, _}
+import org.apache.spark.sql.catalyst.AliasIdentifier
+import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.analysis._
+import operators.physical._
+import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, SortAggregateExec}
+import org.apache.spark.sql.execution.joins.SortMergeJoinExec
 
-import scala.collection.mutable.ListBuffer
 import scala.collection.{Seq, mutable}
+import scala.collection.mutable.ListBuffer
+import org.apache.spark.sql.catalyst.expressions._
+import org.apache.spark.sql.catalyst.plans.JoinType
+import org.apache.spark.sql.catalyst.expressions.Attribute
+import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
+import org.apache.spark.sql.execution.exchange.{Exchange, ShuffleExchangeExec}
 
 abstract class CostModelAbs() extends Serializable {
 
   val maxSpace = Paths.maxSpace * 10
-  //var future: Seq[Seq[Seq[SparkPlan]]]
   val costOfProject: Long = Paths.costOfProject
   val costOfScan: Long = Paths.costOfScan
   val costOfJoin: Long = Paths.costOfJoin
@@ -28,6 +31,8 @@ abstract class CostModelAbs() extends Serializable {
   val costOfUniformSample: Long = Paths.costOfUniformSample
   val costOfUniversalSample: Long = Paths.costOfUniversalSample
   val costOfDistinctSample: Long = Paths.costOfDistinctSample
+  var future: Seq[Seq[Seq[SparkPlan]]] = null // ( q1( sub1(app1,app2) , sub2(app1,app2) ),  q2( sub1(app1,app2) , sub2(app1,app2) ) )
+  var past = new ListBuffer[Seq[Seq[SparkPlan]]]()
 
   val costOfFilter: Long = 0
   val filterRatio: Double = 1.0
@@ -42,13 +47,15 @@ abstract class CostModelAbs() extends Serializable {
 
   def AreCovered(samples: Seq[SampleExec], w: Seq[String]): Boolean = {
     if (samples.size == 0) return false
-    if (w.size==0) return false
+    if (w.size == 0) return false
     samples.foreach(sample => {
       if (!w.find(y => isMoreAccurate(sample, y)).isDefined)
         return false
     })
     return true
   }
+
+  def UpdateWindowHorizon(): Int
 
   def getFutureProjectList(): Seq[String] = Seq()
 
@@ -80,7 +87,7 @@ abstract class CostModelAbs() extends Serializable {
 
   def suggest(): Seq[SparkPlan]
 
-  def addQuery(query: String, ip: String, epoch: Long, f: Seq[String] = null): Unit
+  def addQuery(query: String, f: Seq[String] = null, futureProjectList: ListBuffer[String] = null): Unit
 
   def coverage(s: Seq[UnaryExecNode], b: Seq[UnaryExecNode]): Int = {
     if (b.map(bS => s.find(ss => isMoreAccurate(ss.asInstanceOf[SampleExec], bS.toString())).isDefined).reduce(_ && _)) 1 else 0
@@ -302,7 +309,7 @@ abstract class CostModelAbs() extends Serializable {
       costOfExact(f.child)
     case ProjectExec(projectList, child) =>
       val (inputSize, childCost) = costOfExact(child)
-      val projectRatio = (if (projectList.size == 0) 1 else projectList.size )/ child.output.size.toDouble
+      val projectRatio = (if (projectList.size == 0) 1 else projectList.size) / child.output.size.toDouble
       ((projectRatio * inputSize).toLong + 1, costOfProject * inputSize + childCost)
     case SortMergeJoinExec(a, b, c, d, left, right) =>
       val (leftInputSize, leftChildCost) = costOfExact(left)
@@ -345,7 +352,7 @@ abstract class CostModelAbs() extends Serializable {
       costOfAppWithFixedSynopses(f.child, synopsesCost)
     case ProjectExec(projectList, child) =>
       val (inputSize, childCost) = costOfAppWithFixedSynopses(child, synopsesCost)
-      val projectRatio = (if (projectList.size == 0) 1 else projectList.size )/ child.output.size.toDouble
+      val projectRatio = (if (projectList.size == 0) 1 else projectList.size) / child.output.size.toDouble
       ((projectRatio * inputSize).toLong + 1, costOfProject * inputSize + childCost)
     case SortMergeJoinExec(a, b, c, d, left, right) =>
       val (leftInputSize, leftChildCost) = costOfAppWithFixedSynopses(left, synopsesCost)
@@ -379,7 +386,7 @@ abstract class CostModelAbs() extends Serializable {
       costOfAppPlan(f.child, synopsesCost)
     case ProjectExec(projectList, child) =>
       val (inputSize, childCost) = costOfAppPlan(child, synopsesCost)
-      val projectRatio = (if (projectList.size == 0) 1 else projectList.size )/ child.output.size.toDouble
+      val projectRatio = (if (projectList.size == 0) 1 else projectList.size) / child.output.size.toDouble
       ((projectRatio * inputSize).toLong + 1, costOfProject * inputSize + childCost)
     case SortMergeJoinExec(a, b, c, d, left, right) =>
       val (leftInputSize, leftChildCost) = costOfAppPlan(left, synopsesCost)
@@ -473,5 +480,33 @@ abstract class CostModelAbs() extends Serializable {
 
   def aggToString(aggregateExpressions: Seq[AggregateExpression]) = aggregateExpressions.map(x => "" + x.aggregateFunction.children.map(p => getAttNameOfAtt(p.find(_.isInstanceOf[Attribute]).map(_.asInstanceOf[Attribute]).getOrElse(null))).mkString("") + "").mkString(",")
 
+  def calMinExecutionTimeBetweenTwoInvocations(A: Seq[(String, Long)]): Long = {
+    past.takeRight(step).map(subQueries => subQueries.map(pps => {
+      pps.map(pp => costOfAppWithFixedSynopses(pp, A)).minBy(_._2)._2
+    }).reduce(_ + _)).reduce(_ + _)
+  }
+
+  def GetBestSynopses(w: Int): Seq[(String, Long)] = {
+    val A: ListBuffer[(String, Long)] = ListBuffer[(String, Long)]()
+    val VMinusA = new mutable.HashMap[String, Long]()
+    past.takeRight(w).flatMap(x => x.flatMap(y => y.flatMap(z => extractSynopses(z)))).map(y => (y.toString(), costOfAppPlan(y, Seq())._1)).foreach(x => VMinusA.put(x._1, x._2))
+    var sizeOfA: Long = 0
+    if (VMinusA.reduce((a, b) => (null, a._2 + b._2))._2 <= maxSpace)
+      return VMinusA.toSeq
+    while (VMinusA.find(s => s._2 + sizeOfA <= maxSpace).isDefined) {
+      val eachSynopsisMarginalRewardForCurrentA = VMinusA.map(synopsis // { ( (sample1,cost) ,marginalGain) }
+      => (synopsis,
+          past.takeRight(w).map(subQueries => subQueries.map(pps => {
+            pps.map(pp => costOfAppWithFixedSynopses(pp, A)).minBy(_._2)._2 - pps.map(pp => costOfAppWithFixedSynopses(pp, A ++ Seq(synopsis))).minBy(_._2)._2
+          }).reduce(_ + _)).reduce(_ + _)
+        )).toList.sortBy(_._2)(Ordering[Long].reverse)
+      val bestSynopsisOption = eachSynopsisMarginalRewardForCurrentA.find(x => x._1._2 + sizeOfA <= maxSpace)
+      val best = bestSynopsisOption.get
+      A.+=(best._1)
+      sizeOfA += best._1._2
+      VMinusA.remove(best._1._1)
+    }
+    return A
+  }
 
 }
