@@ -26,6 +26,9 @@ object mainSDL {
   val tableCounter = new mutable.HashMap[String, Int]()
 
   def main(args: Array[String]): Unit = {
+    var Proteus_URL = ""
+    var Proteus_username = ""
+    var Proteus_pass = ""
     SparkSession.setActiveSession(sparkSession)
     System.setProperty("geospark.global.charset", "utf8")
     sparkSession.sparkContext.setLogLevel("ERROR");
@@ -33,7 +36,7 @@ object mainSDL {
     sparkSession.conf.set("spark.driver.maxResultSize", "8g")
     sparkSession.conf.set("spark.sql.codegen.wholeStage", false); // disable codegen
     sparkSession.conf.set("spark.sql.crossJoin.enabled", true)
-    readSDLConfiguration()
+    //readSDLConfiguration()
     loadTables()
 //    sparkSession.sql("select count(revenue) from PFT p, SCT s where p.company_acheneID= s.acheneID").show()
     if (new java.io.File(parentDir + "warehouseParquetNameToSize.ser").exists)
@@ -46,10 +49,11 @@ object mainSDL {
       new ObjectInputStream(new FileInputStream(parentDir + "lastUsedOfParquetSample.ser")).readObject.asInstanceOf[mutable.HashMap[String, Long]].foreach((a) => lastUsedOfParquetSample.put(a._1, a._2))
     if (new java.io.File(parentDir + "parquetNameToHeader.ser").exists)
       new ObjectInputStream(new FileInputStream(parentDir + "parquetNameToHeader.ser")).readObject.asInstanceOf[mutable.HashMap[String, String]].foreach((a) => parquetNameToHeader.put(a._1, a._2))
-    mapRDDScanRowCNT = readRDDScanRowCNT(pathToTableParquet)
+    mapRDDScanRowCNT = definition.Paths.readRDDScanRowCNT(sparkSession)
     sparkSession.experimental.extraStrategies = Seq(/*extraRulesWithoutSampling,*/ SketchPhysicalTransformation, SampleTransformation);
 
-
+    val REST=false
+    val REST_PORT=0
     if (REST) {
       val queryLog = new ListBuffer[String]()
       val server = new ServerSocket(REST_PORT)
@@ -162,7 +166,7 @@ object mainSDL {
       sparkSession.experimental.extraStrategies = Seq(SketchPhysicalTransformation, SampleTransformation);
       val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan(tempQuery)
       checkAndCreateTable(logicalPlan)
-      outString = extraSQLOperators.execBinning(sparkSession, table, binningCol, binningPart, binningStart, binningEnd, confidence, error, seed)
+      outString = ""// extraSQLOperators.execBinning(sparkSession, table, binningCol, binningPart, binningStart, binningEnd, confidence, error, seed)
     } else if (dataProfileTable != "") {
       val logicalPlan = sparkSession.sessionState.sqlParser.parsePlan("select * from " + dataProfileTable)
       checkAndCreateTable(logicalPlan)
@@ -182,7 +186,7 @@ object mainSDL {
         var cheapestPhysicalPlan = changeSynopsesWithScan(pp)
         executeAndStoreSample(cheapestPhysicalPlan)
         cheapestPhysicalPlan = changeSynopsesWithScan(cheapestPhysicalPlan)
-        cheapestPhysicalPlan = prepareForExecution(cheapestPhysicalPlan)
+       // cheapestPhysicalPlan = prepareForExecution(cheapestPhysicalPlan)
         executeAndStoreSketch(cheapestPhysicalPlan)
         println(cheapestPhysicalPlan)
         timeForSampleConstruction += (System.nanoTime() - checkpointForSampleConstruction)
@@ -285,9 +289,9 @@ object mainSDL {
   def getAndCreateTableFromProteus(tableName: String): Unit = {
     System.out.println("fetching table from proteus " + tableName)
     Class.forName("org.apache.calcite.avatica.remote.Driver")
-    val connection: Connection = DriverManager.getConnection(Paths.Proteus_URL, Paths.Proteus_username, Paths.Proteus_pass)
+    val connection: Connection = DriverManager.getConnection("Proteus_URL", "Proteus_username", "Proteus_pass")
     val statement = connection.createStatement()
-    val rs = statement.executeQuery("select * from " + tableName + " limit " + Paths.JDBCRowLimiter)
+    val rs = statement.executeQuery("select * from " + tableName + " limit " + "JDBCRowLimiter")
     val rsmd = rs.getMetaData
 
     var header = ""

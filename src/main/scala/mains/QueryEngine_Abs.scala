@@ -1,31 +1,31 @@
 package mains
 
+import org.apache.spark.sql.catalyst.expressions.codegen.{Predicate => GenPredicate, _}
+import definition.Paths.{costOfDistinctSample, costOfJoin, costOfProject, costOfScan, costOfShuffle, costOfUniformSample, costOfUniversalSample, fractionStep, _}
+import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.catalyst.rules.Rule
+import org.apache.spark.sql.execution.exchange.{EnsureRequirements, ReuseExchange}
+import org.apache.spark.sql.execution._
+import rules.physical.{ChangeSampleToScan, ExtendProjectList, PushFilterDown}
 import java.io._
 import java.util.Date
-
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
 import costModel.CostModelAbs
 import definition.Paths
-import definition.Paths.{costOfDistinctSample, costOfJoin, costOfProject, costOfScan, costOfShuffle, costOfUniformSample, costOfUniversalSample, _}
 import operators.physical._
-import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
-import org.apache.spark.sql.catalyst.expressions.codegen.{GeneratePredicate, Predicate => GenPredicate}
-import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
+import org.apache.spark.sql.catalyst.expressions.codegen.GeneratePredicate
 import org.apache.spark.sql.catalyst.plans.logical.ReturnAnswer
-import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.aggregate.HashAggregateExec
-import org.apache.spark.sql.execution.exchange.{EnsureRequirements, ReuseExchange}
 import org.apache.spark.sql.execution.joins.SortMergeJoinExec
-import rules.physical.{ChangeSampleToScan, ExtendProjectList, PushFilterDown}
 
-import scala.collection.mutable.ListBuffer
 import scala.collection.{Seq, mutable}
+import scala.collection.mutable.ListBuffer
 import scala.io.Source
 import scala.reflect.io.Directory
 import scala.util.Random
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.catalyst.InternalRow
 
 abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Serializable {
 
@@ -40,7 +40,14 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
   sparkSession.conf.set("spark.driver.maxResultSize", "8g")
   sparkSession.conf.set("spark.sql.codegen.wholeStage", false) // disable codegen
   sparkSession.conf.set("spark.sql.crossJoin.enabled", true)
-
+  var i = 1
+  var timeTotalRuntime: Long = 0
+  var timeReadNextQuery: Long = 0
+  var timeAPPGeneration: Long = 0
+  var timePlanSuggestion: Long = 0
+  var timeUpdateWarehouse: Long = 0
+  var timeUpdateWindowHorizon: Long = 0
+  var queries: List[(String, String, Long)] = null
   var confidence = 0.90
   var error = 0.10
   val results = new ListBuffer[(String, String, Long, Long, Long, Long, Long, Long)]()
@@ -48,6 +55,8 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
   var isExtended = true
   var justAPP = false
   var isAdaptive = false
+  val futureProjectList = new ListBuffer[String]()
+
   val zValue = Array.fill[Double](100)(0.70)
   zValue(99) = 2.58
   zValue(98) = 1.96
@@ -97,25 +106,93 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
 
   }
 
+  def execute(costModel: CostModelAbs) = {
+    timeTotalRuntime = System.nanoTime()
+    queries = loadWorkloadWithIP("skyServer", sparkSession)
+    var timeCHK: Long = 0
+    var timeExec: Long = 0
+    for (query <- queries) if (queryCNT <= testSize) {
+      sparkSession.sqlContext.clearCache()
+      outputOfQuery = ""
+      println(i + "qqqqqqqqqqqqqqqqqq" + query)
+      i += 1
+
+      timeCHK = System.nanoTime()
+      if (isAdaptive && i > 0 && (i % step == 0 || i % step == stepper)) {
+        windowSize = costModel.UpdateWindowHorizon()
+        println(windowSize)
+      }
+      timeUpdateWindowHorizon += System.nanoTime() - timeCHK
+
+
+      timeCHK = System.nanoTime()
+      val future = ReadNextQueries(query._1, query._2, query._3, i)
+      timeReadNextQuery += System.nanoTime() - timeCHK
+
+      timeCHK = System.nanoTime()
+      costModel.addQuery(query._1, future,futureProjectList.distinct)
+      timeAPPGeneration += System.nanoTime() - timeCHK
+
+      timeCHK = System.nanoTime()
+      val appPhysicalPlan = costModel.suggest()
+      timePlanSuggestion += System.nanoTime() - timeCHK
+
+      timeCHK = System.nanoTime()
+      for (subqueryAPP <- appPhysicalPlan) {
+        var cheapest = changeSynopsesWithScan(prepareForExecution(subqueryAPP, sparkSession))
+        // println(cheapest)
+        if (isExtended)
+          cheapest = ExtendProject(cheapest, costModel.getFutureProjectList().distinct)
+        executeAndStoreSample(cheapest, sparkSession)
+        cheapest = changeSynopsesWithScan(cheapest)
+        countReusedSample(cheapest)
+        // println(cheapest)
+        cheapest.executeCollectPublic().toList.sortBy(_.toString()).foreach(row => {
+          outputOfQuery += row.toString() + "\n"
+          counterNumberOfGeneratedRow += 1
+        })
+      }
+      timeExec += (System.nanoTime() - timeCHK)
+
+      println((System.nanoTime() - timeCHK) / 1000000000)
+      println(timeExec / 1000000000)
+
+      timeCHK = System.nanoTime()
+      costModel.updateWarehouse()
+      timeForUpdateWarehouse += System.nanoTime() - timeCHK
+
+      //   results += ((query._1, outputOfQuery, checkpointForAppQueryExecution, checkpointForAppQueryPlanning
+      //      , checkPointForSampling, checkAct, checkWare, checkPointForExecution))
+      //     val agg = results.reduce((a, b) => ("", "", a._3 + b._3, a._4 + b._4, a._5 + b._5, a._6 + b._6, a._7 + b._7, a._8 + b._8))
+      //     println(checkPointForExecution / 1000000000 + "," + agg._8 / 1000000000)
+
+      queryCNT += 1
+    }
+    timeTotalRuntime = System.nanoTime() - timeTotalRuntime
+    printReport()
+  }
+
+
   def readConfiguration(args: Array[String]): Unit = {
     if (isLocal) {
       val parent = "/home/hamid/QAL/QP/skyServer/"
-      pathToQueryLog = parent + "workload/log11"
+      pathToQueryLog = parent + "workload/log7"
       pathToML_Info = parent + "ML/"
       pathToTableParquet = parent + "data_parquet/"
       pathToSaveSynopses = parent + "warehouse/" //"/home/hamid/QAL/QP/skyServer/warehouse/"
-      windowSize = 6
+      windowSize = 10
       futureWindowSize = 5
-      maxSpace = 100
-      confidence = 0.7
-      error = 0.5
-      testSize = 110
+      maxSpace = 1000
+      confidence = 0.99
+      error = 0.1
+      testSize = 50
       isLRU = false
-      isExtended = true
-      justAPP = false
-      tag = "processVec_1800Gap_5processMinLength_100maxQueryRepetition_2featureMinFRQ_5reserveFeature_2007fromYear"
+      isExtended = false
+      justAPP = true
+      isAdaptive = true
+      tag = "processVec_1800Gap_5processMinLength_10000maxQueryRepetition_1featureMinFRQ_20reserveFeature_2007fromYear_20202toYear"
       //tag = "processVec_1800Gap_2processMinLength_10000maxQueryRepetition_1featureMinFRQ_10reserveFeature_2007fromYear"
-      featureCNT = 512 //118//365//412 //571 //138
+      featureCNT = 555 //118//365//412 //571 //138
       costOfProject = 1 //2 // args(11).toInt
       costOfScan = 1 //5 // args(12).toInt
       costOfJoin = 10 //6 //args(13).toInt
@@ -150,13 +227,13 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
         costOfUniformSample = args(17).toInt
         costOfUniversalSample = args(18).toInt
         costOfDistinctSample = args(19).toInt
-        costOfProject = 1//2 // args(11).toInt
-        costOfScan = 1//5 // args(12).toInt
-        costOfJoin = 10//6 //args(13).toInt
+        costOfProject = 1 //2 // args(11).toInt
+        costOfScan = 1 //5 // args(12).toInt
+        costOfJoin = 10 //6 //args(13).toInt
         costOfShuffle = 10 //args(14).toInt
         costOfUniformSample = 40 // args(15).toInt
-        costOfUniversalSample = 15 // args(16).toInt
-        costOfDistinctSample = 25//args(17).toInt
+        costOfUniversalSample = 45 // args(16).toInt
+        costOfDistinctSample = 25 //args(17).toInt
       }
       else {
         val r = scala.util.Random
@@ -175,6 +252,7 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
 
   }
 
+  def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String]
 
   def flush(): Unit = {
     (new File(pathToSaveSynopses)).listFiles.filter(_.getName.contains(".obj")).foreach(Directory(_).deleteRecursively())
@@ -202,62 +280,6 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
     timeForTokenizing = 0
   }
 
-  def execute(queries: Seq[(String, String, Long)], costModel: CostModelAbs) = {
-    var i=1
-    for (query <- queries) if (queryCNT <= testSize) {
-      sparkSession.sqlContext.clearCache()
-      var checkpointForAppQueryExecution = System.nanoTime()
-      var checkpointForAppQueryPlanning = System.nanoTime()
-      var checkPointForSampling: Long = 0
-      var checkPointForExecution: Long = 0
-      var checkAct: Long = 0
-      costModel.addQuery(query._1, query._2.replace("\t", ""), query._3)
-      outputOfQuery = ""
-      println(i+"qqqqqqqqqq" + query)
-      i+=1
-      val appPhysicalPlan = costModel.suggest()
-      // appPhysicalPlan.foreach(x => println(toStringTree(x)))
-      checkpointForAppQueryPlanning = (System.nanoTime() - checkpointForAppQueryPlanning) / 1
-      for (subqueryAPP <- appPhysicalPlan) {
-        var cheapest = ExtendProject(subqueryAPP, costModel.getFutureProjectList())
-        //println(cheapest)
-        cheapest = changeSynopsesWithScan(cheapest)
-        //println(cheapest)
-        var t = System.nanoTime()
-        val tt = System.nanoTime()
-        executeAndStoreSample(cheapest, sparkSession)
-        cheapest = changeSynopsesWithScan(cheapest)
-        cheapest.transform({
-          case s: operators.physical.SampleExec =>
-            println("i did")
-            s.child
-        })
-        //println(cheapest)
-        checkPointForSampling += (System.nanoTime() - t) / 1
-        countReusedSample(cheapest)
-        t = System.nanoTime()
-        cheapest = prepareForExecution(cheapest, sparkSession)
-     //        println(cheapest)
-        cheapest.executeCollectPublic().toList.foreach(row => {
-          outputOfQuery += row.toString()
-          counterNumberOfGeneratedRow += 1
-        })
-        checkPointForExecution += (System.nanoTime() - tt) / 1
-        checkAct += (System.nanoTime() - t) / 1
-      }
-      queryCNT += 1
-      var checkWare = System.nanoTime()
-      costModel.updateWarehouse()
-      checkWare = (System.nanoTime() - checkWare) / 1
-      checkpointForAppQueryExecution = (System.nanoTime() - checkpointForAppQueryExecution) / 1
-      //  checkpointForAppQueryExecution
-      results += ((query._1, outputOfQuery, checkpointForAppQueryExecution, checkpointForAppQueryPlanning
-        , checkPointForSampling, checkAct, checkWare, checkPointForExecution))
-      val agg = results.reduce((a, b) => ("", "", a._3 + b._3, a._4 + b._4, a._5 + b._5, a._6 + b._6, a._7 + b._7, a._8 + b._8))
-      println(checkPointForExecution/1000000000+","+agg._8/1000000000)
-
-    }
-  }
 
   def toStringTree(pp: SparkPlan, intent: String = ""): String = pp match {
     case s: ScaleAggregateSampleExec =>
@@ -310,21 +332,13 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
             lastUsedCounter += 1
             lastUsedOfParquetSample.put(name, lastUsedCounter)
             parquetNameToHeader.put(name, getHeaderOfOutput(z.output))
-            synopsesSize.put(z.toString(),size)
+            synopsesSize.put(z.toString(), size)
             val oos: ObjectOutputStream = new ObjectOutputStream(new FileOutputStream(parentDir + "synopsesSize.ser"))
             oos.writeObject(synopsesSize)
             oos.close()
-
-            println("stored: " + name + ","  + "," + size + "," + z.toString())
+            println("stored: " + name + "," + "," + size + "," + z.toString())
             return
           }
-
-          //val converter = CatalystTypeConverters.createToScalaConverter(s.schema)
-          //val dfOfSample = sparkSession.createDataFrame(prepareForExecution(s, sparkSession).execute().map(converter(_).asInstanceOf[Row]), s.schema)
-          //dfOfSample.write.format("parquet").save(pathToSaveSynopses + name + ".parquet");
-          //dfOfSample.createOrReplaceTempView(name)
-          //   println(prepareForExecution( s,sparkSession).execute.getNumPartitions)
-          //println(s.output)
           prepareForExecution(s, sparkSession).execute().saveAsObjectFile(pathToSaveSynopses + name + ".obj")
           numberOfGeneratedSynopses += 1
           val size = folderSize(new File(pathToSaveSynopses + name + ".obj"))
@@ -335,12 +349,12 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
           lastUsedCounter += 1
           lastUsedOfParquetSample.put(name, lastUsedCounter)
           parquetNameToHeader.put(name, getHeaderOfOutput(s.output))
-          synopsesSize.put(s.toString(),size)
+          synopsesSize.put(s.toString(), size)
           val oos: ObjectOutputStream = new ObjectOutputStream(new FileOutputStream(parentDir + "synopsesSize.ser"))
           oos.writeObject(synopsesSize)
           oos.close()
 
-          println("stored: " + name + ","  + "," + size + "," + s.toString())
+          println("stored: " + name + "," + "," + size + "," + s.toString())
         case a =>
           a.children.foreach(x => queue.enqueue(x))
       }
@@ -465,7 +479,6 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
   def loadTables(sparkSession: SparkSession): Unit = {
     (new File(pathToTableParquet)).listFiles.filter(_.getName.contains(".parquet")).foreach(table => {
       val view = sparkSession.read.parquet(table.getAbsolutePath) //.sample(.2)//.repartition(1).withColumn("ww___ww", org.apache.spark.sql.functions.lit(1.0));
-      //view.write.parquet("/home/hamid/QAL/QP/skyServer/data_parquetS/"+table.getName)
       sparkSession.sqlContext.createDataFrame(view.rdd, view.schema).createOrReplaceTempView(table.getName.split("\\.")(0).toLowerCase);
       Paths.tableToCount.put(table.getName.split("\\.")(0).toLowerCase, view.count() / 10000)
     })
@@ -474,11 +487,7 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
   def loadWorkloadWithIP(bench: String, sparkSession: SparkSession): List[(String, String, Long)] = {
     var temp: ListBuffer[String] = ListBuffer();
     if (bench.equals("skyServer")) {
-      //  var src = Source.fromFile(BENCH_DIR + "queryLog.csv").getLines
-      //  src.take(1).next
-      // var counter = 0
       import sparkSession.implicits._
-
       sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "false")
         .option("inferSchema", "true").option("delimiter", ";").option("nullValue", "null").schema(logSchema)
         .load(pathToQueryLog).filter("statement is not null and clientIP is not null")
@@ -487,7 +496,6 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
         .select("clientIP", "yy", "mm", "dd", "hh", "mi", "ss", "statement")
         .map(x => (x.getAs[String](7), x.getAs[String](0), new Date(x.getAs[Int](1), x.getAs[Int](2), x.getAs[Int](3)
           , x.getAs[Int](4), x.getAs[Int](5), x.getAs[Int](6)).getTime / 1000)).collect().take(definition.Paths.testSize).toList
-      //.sort("clientIP", "yy", "mm", "dd", "hh", "mi", "ss", "seq")
     }
     else
       throw new Exception("Invalid input data benchmark")
@@ -496,33 +504,12 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
   def loadWorkload(bench: String, sparkSession: SparkSession): List[String] = {
     var temp: ListBuffer[String] = ListBuffer();
     if (bench.equals("skyServer")) {
-      //  var src = Source.fromFile(BENCH_DIR + "queryLog.csv").getLines
-      //  src.take(1).next
-      // var counter = 0
       import sparkSession.implicits._
-
       sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "false")
         .option("inferSchema", "true").option("delimiter", ";").option("nullValue", "null").schema(logSchema)
         .load(pathToQueryLog).filter("statement is not null and clientIP is not null")
         .filter(row => row.getAs[String]("statement").trim.length > 0 && row.getAs[String]("clientIP").trim.length > 0)
-        //.sort("clientIP", "yy", "mm", "dd", "hh", "mi", "ss", "seq")
         .select("statement").map(_.getAs[String](0)).collect().toList
-      //     val queryLog = sparkSession.sqlContext.read.format("com.databricks.spark.csv").option("header", "true")
-      //     .option("inferSchema", "true").option("delimiter", ";").option("nullValue", "null").load(BENCH_DIR);
-      // queryLog.filter("rows>0").sort(col("clientIP"),col("seq").asc).select("statement").show()
-      //     for (l <- src) {
-      //  try {
-      //    if (l.split(";")(8).toLong > 0) {
-      //        if (l.split(';')(9).size > 30)
-      //    temp.+=(l.split(';')(9))
-      //     } else
-      //      counter = counter + 1
-      //   }
-      // catch {
-      //     case e: Exception =>
-      //    }
-      //     }
-      //    temp.toList
     }
     else if (bench.equals("atoka") || bench.equals("test") || bench.equals("tpch")) {
       val src = Source.fromFile(pathToQueryLog).getLines
@@ -536,18 +523,18 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
   }
 
 
-  def printReport(results: Seq[(String, String, Long, Long, Long, Long, Long, Long)]) = {
+  def printReport() = {
     // (query, out, totalT, planTime, samplingT, execT, warehouseTime,execT)
-    val agg = results.reduce((a, b) => ("", "", a._3 + b._3, a._4 + b._4, a._5 + b._5, a._6 + b._6, a._7 + b._7, a._8 + b._8))
+    // val agg = results.reduce((a, b) => ("", "", a._3 + b._3, a._4 + b._4, a._5 + b._5, a._6 + b._6, a._7 + b._7, a._8 + b._8))
 
     var fw = new FileWriter("res", true)
-    fw.write(Seq(name, maxSpace, windowSize, agg._3 / 1000000000, (agg._4 + agg._7) / 1000000000, (agg._3 - (agg._4 + agg._7)) / 1000000000, agg._8 / 1000000000, numberOfGeneratedSynopses, numberOfSynopsesReuse, numberOfRemovedSynopses, pathToQueryLog.split("/").last, queryCNT, confidence, error, isLRU, isExtended, justAPP, costOfProject, costOfScan, costOfJoin, costOfShuffle, costOfUniformSample, costOfUniversalSample, costOfDistinctSample).mkString("\t\t") + "\n")
+    fw.write(Seq(name, maxSpace, windowSize, timeTotalRuntime / 1000000000, (timeUpdateWindowHorizon + timeReadNextQuery + timeAPPGeneration + timePlanSuggestion + timeUpdateWarehouse) / 1000000000, timeUpdateWindowHorizon / 1000000000, timeReadNextQuery / 1000000000, timeAPPGeneration / 1000000000, timePlanSuggestion / 1000000000, timeUpdateWarehouse / 1000000000, numberOfGeneratedSynopses, numberOfSynopsesReuse, numberOfRemovedSynopses, pathToQueryLog.split("/").last, queryCNT, confidence, error, isLRU, isExtended, justAPP, costOfProject, costOfScan, costOfJoin, costOfShuffle, costOfUniformSample, costOfUniversalSample, costOfDistinctSample).mkString("\t\t") + "\n")
     fw.close()
     var writer = new PrintWriter(new File(this.name + "_" + windowSize + "_" + maxSpace + "_" + pathToQueryLog.split("/").last + "_" + justAPP + "_" + confidence + "_" + error))
     //fw = new FileWriter(this.name+"_"+windowSize+"_"+maxSpace+"_"+pathToQueryLog.split("/").last+"_"+justAPP+"_"+confidence+"_"+error, false)
-    results.foreach(X => writer.println((X._8).toString))
+    // results.foreach(X => writer.println((X._8).toString))
     writer.close()
-    System.out.println(Seq(name, maxSpace, windowSize, agg._3 / 1000000000, (agg._4 + agg._7) / 1000000000, (agg._3 - (agg._4 + agg._7)) / 1000000000, agg._8 / 1000000000, numberOfGeneratedSynopses, numberOfSynopsesReuse, numberOfRemovedSynopses, pathToQueryLog.split("/").last, queryCNT, confidence, error, isLRU, isExtended, justAPP, costOfProject, costOfScan, costOfJoin, costOfShuffle, costOfUniformSample, costOfUniversalSample, costOfDistinctSample).mkString("\t\t"))
+    System.out.println(Seq(name, maxSpace, windowSize, timeTotalRuntime / 1000000000, (timeUpdateWindowHorizon + timeReadNextQuery + timeAPPGeneration + timePlanSuggestion + timeUpdateWarehouse) / 1000000000, timeUpdateWindowHorizon / 1000000000, timeReadNextQuery / 1000000000, timeAPPGeneration / 1000000000, timePlanSuggestion / 1000000000, timeUpdateWarehouse / 1000000000, numberOfGeneratedSynopses, numberOfSynopsesReuse, numberOfRemovedSynopses, pathToQueryLog.split("/").last, queryCNT, confidence, error, isLRU, isExtended, justAPP, costOfProject, costOfScan, costOfJoin, costOfShuffle, costOfUniformSample, costOfUniversalSample, costOfDistinctSample).mkString("\t\t"))
     /*  println("Engine: " + name)
       println("Total query: " + queryCNT)
       println("Number of generated rows: " + counterNumberOfGeneratedRow)
@@ -590,8 +577,8 @@ abstract class QueryEngine_Abs(name: String, isLocal: Boolean = true) extends Se
     EnsureRequirements(sparkSession.sessionState.conf),
     CollapseCodegenStages(sparkSession.sessionState.conf),
     PushFilterDown(),
-    ReuseExchange(sparkSession.sessionState.conf) //,
-    //  ReuseSubquery(sparkSession.sessionState.conf)
+    ReuseExchange(sparkSession.sessionState.conf),
+    ReuseSubquery(sparkSession.sessionState.conf)
   )
 
   def countReusedSample(pp: SparkPlan): Unit = pp match {

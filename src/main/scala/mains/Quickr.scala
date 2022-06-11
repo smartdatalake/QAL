@@ -25,7 +25,7 @@ object Quickr extends QueryEngine_Abs("Quickr") {
       var checkpointForAppQueryExecution = System.nanoTime()
       var checkpointForAppQueryPlanning = System.nanoTime()
       var checkPointForExecution: Long = 0
-      costModel.addQuery(query._1, query._2.replace("\t", ""), query._3)
+      //costModel.addQuery(query._1, query._3)
       outputOfQuery = ""
       // println("qqqqqqqqqq" + query)
       val appPhysicalPlan = costModel.suggest()
@@ -34,9 +34,9 @@ object Quickr extends QueryEngine_Abs("Quickr") {
       for (subqueryAPP <- appPhysicalPlan) {
         var cheapest = ExtendProject(subqueryAPP, costModel.getFutureProjectList())
         val tt = System.nanoTime()
-      //  println(cheapest)
+        //  println(cheapest)
         cheapest = prepareForExecution(cheapest, sparkSession)
-       //   println(cheapest)
+        //   println(cheapest)
         cheapest.executeCollectPublic().toList.foreach(row => {
           outputOfQuery += row.toString()
           counterNumberOfGeneratedRow += 1
@@ -50,9 +50,11 @@ object Quickr extends QueryEngine_Abs("Quickr") {
         , 0, 0, 0, checkPointForExecution))
     }
 
-    printReport(results)
+    printReport()
     flush()
   }
+
+  override def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String] = null
 
   override def readConfiguration(args: Array[String]): Unit = {super.readConfiguration(args)
   }

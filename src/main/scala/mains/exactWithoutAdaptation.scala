@@ -1,9 +1,13 @@
 package mains
 
 import costModel.ExactCostModel
+import rules.logical.pushFilterUp
+
+import scala.collection.Seq
 
 
 object exactWithoutAdaptation extends QueryEngine_Abs("NoApp") {
+  override def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String] = null
 
   //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -13,10 +17,10 @@ object exactWithoutAdaptation extends QueryEngine_Abs("NoApp") {
     val costModel = new ExactCostModel(sparkSession)
     loadTables(sparkSession)
     val queries = loadWorkloadWithIP("skyServer", sparkSession)
-   // sparkSession.sql("select  count(*) as count from photoobj p ").show(100000)
-  //  throw new Exception
-    execute(queries, costModel)
-    printReport(results)
+    // sparkSession.sql("select  count(*) as count from photoobj p ").show(100000)
+    //  throw new Exception
+    execute(costModel)
+    printReport()
     flush()
   }
 

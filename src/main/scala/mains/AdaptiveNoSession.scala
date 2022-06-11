@@ -2,6 +2,7 @@ package mains
 
 import java.nio.file.{Files, Paths}
 import java.util
+import java.util.Date
 
 import costModel.PredictiveCostModel
 import definition.ModelInfo
@@ -9,17 +10,15 @@ import definition.Paths._
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import rules.logical.{ApproximateInjector, pushFilterUp}
 import rules.physical.SampleTransformationMultiple
-import java.nio.file.{Files, Paths}
-import java.util.Date
 
 import scala.collection.mutable.{HashMap, ListBuffer}
 import scala.collection.{Seq, mutable}
 import scala.io.Source
 
 
-object Adaptive extends QueryEngine_Abs("MLLSTM") {
+object AdaptiveNoSession extends QueryEngine_Abs("MLLSTMNoSession") {
   val sessionPool: ListBuffer[String] = ListBuffer()
-  val sessions = new mutable.HashMap[String, mutable.Queue[(Long, LogicalPlan, String)]]() // ( ip1:( q1:( sub1:(app1,app2) , sub2:(app1,app2) ),  q2:( sub1:(app1,app2) , sub2:(app1,app2) ) ) )
+  val sessions = new mutable.Queue[(Long, LogicalPlan, String)]() // ( ip1:( q1:( sub1:(app1,app2) , sub2:(app1,app2) ),  q2:( sub1:(app1,app2) , sub2:(app1,app2) ) ) )
   //val indexToAccessedCol: mutable.HashMap[Int, String] = new mutable.HashMap[Int, String]()
   //val indexToGroupByKey: mutable.HashMap[Int, String] = new mutable.HashMap[Int, String]()
   //val indexToJoinKey: mutable.HashMap[Int, String] = new mutable.HashMap[Int, String]()
@@ -30,8 +29,8 @@ object Adaptive extends QueryEngine_Abs("MLLSTM") {
   //val tableToVectorIndex: mutable.HashMap[String, Int] = new mutable.HashMap[String, Int]()
   //var vectorSize = 0
   pathToML_Info = "/home/hamid/QAL/DensityCluster/"
-  val tag = "_train_gap1800_processMinLength3_maxQueryRepetition10000_featureMinFRQ1_reserveFeature15"
-  val tag2 = "_test_gap1800_processMinLength3_maxQueryRepetition10000_featureMinFRQ1_reserveFeature15"
+  val tag = "_train_gap18000000_processMinLength5_maxQueryRepetition10000000_featureMinFRQ1_reserveFeature15"
+  val tag2 = "_test_gap18000000_processMinLength5_maxQueryRepetition10000000_featureMinFRQ1_reserveFeature15"
   val timeBucket = 14
   val url = "http://localhost:5000/vec?vec="
   val url2 = "http://localhost:5000/test?vec="
@@ -40,7 +39,7 @@ object Adaptive extends QueryEngine_Abs("MLLSTM") {
   //var groupByIndexRange = (0, 0)
   //var joinKeyIndexRange = (0, 0)
   //var tableIndexRange = (0, 0)
-  val setup: Seq[String] = Seq("4YearTo2Week", "4YearTo6Month", "2WeekTo2Week")
+  val setup: Seq[String] = Seq("4YearTo6Month", "2WeekTo2Week")
   //, "1DayTo1Day")
   val modelInfo: mutable.HashMap[(String, Int), ModelInfo] = new mutable.HashMap[(String, Int), ModelInfo]()
   ReadModelInfo()
@@ -77,7 +76,7 @@ object Adaptive extends QueryEngine_Abs("MLLSTM") {
     timeTotalRuntime = System.nanoTime()
     queries = loadWorkloadWithIP("skyServer", sparkSession)
     currentEpoch = queries(0)._3
-    m_4Yto2W = m.find(x => x._1._1.equalsIgnoreCase("4YearTo2Week") && x._1._2 <= ((currentEpoch - begin) / (2 * WEEK)).toInt).get
+   // m_4Yto2W = m.find(x => x._1._1.equalsIgnoreCase("4YearTo2Week") && x._1._2 <= ((currentEpoch - begin) / (2 * WEEK)).toInt).get
     m_4Yto6M = m.find(x => x._1._1.equalsIgnoreCase("4YearTo6Month") && x._1._2 <= ((currentEpoch - begin) / (6 * MONTH)).toInt).get
     m_2Wto2W = m.find(x => x._1._1.equalsIgnoreCase("2WeekTo2Week") && x._1._2 <= ((currentEpoch - begin) / (2 * WEEK)).toInt).get
     //m_1Dto1D = m.find(x => x._1._1.equalsIgnoreCase("1DayTo1Day") && x._1._2 <= ((currentEpoch - begin) / (1 * DAY)).toInt).get
@@ -99,13 +98,13 @@ object Adaptive extends QueryEngine_Abs("MLLSTM") {
       //    }
       //     else println("xxxxxxxxx")
 
-      if ((i % step == 0 || i % step == stepper)) {
-        //   selectModel()
-      }
-      if (isAdaptive && i > 0 && (i % step == 0 || i % step == stepper)) {
-        // windowSize = costModel.UpdateWindowHorizon()
-        println(windowSize)
-      }
+    //  if ((i % step == 0 || i % step == stepper)) {
+    //    selectModel()
+   //   }
+     // if (isAdaptive && i > 0 && (i % step == 0 || i % step == stepper)) {
+     //   windowSize = costModel.UpdateWindowHorizon()
+    //    println(windowSize)
+   //   }
       timeUpdateWindowHorizon += System.nanoTime() - timeCHK
 
 
@@ -165,90 +164,17 @@ object Adaptive extends QueryEngine_Abs("MLLSTM") {
     flush()
   }
 
-  def selectModel() = {
-    val validation = (sessionPool ++ sessions.map(_._2.map(_._3).mkString(delimiterVector))).takeRight(k)
-
-    if (PreVal4Yto2W < 80)
-      m_4Yto2W = m.find(x => x._1._1.equalsIgnoreCase("4YearTo2Week") && x._1._2 <= ((currentEpoch - begin) / (2 * WEEK)).toInt).get
-    if (PreVal4Yto6M < 80)
-      m_4Yto6M = m.find(x => x._1._1.equalsIgnoreCase("4YearTo6Month") && x._1._2 <= ((currentEpoch - begin) / (6 * MONTH)).toInt).get
-    if (PreVal2Wto2W < 50)
-      m_2Wto2W = m.find(x => x._1._1.equalsIgnoreCase("2WeekTo2Week") && x._1._2 <= ((currentEpoch - begin) / (2 * WEEK)).toInt).get
-    // if (PreVal1Dto1D < 50)
-    //   m_1Dto1D = m.find(x => x._1._1.equalsIgnoreCase("1DayTo1Day") && x._1._2 <= ((currentEpoch - begin) / (1 * DAY)).toInt).get
-    var temp = getAccuracy(validation, m_4Yto2W._1._1, m_4Yto2W._1._2, m_4Yto2W._2)
-    val val4Yto2W = if (temp.size > 0) temp.toInt else 0
-    temp = getAccuracy(validation, m_4Yto6M._1._1, m_4Yto6M._1._2, m_4Yto6M._2)
-    val val4Yto6M = if (temp.size > 0) temp.toInt else 0
-    temp = getAccuracy(validation, m_2Wto2W._1._1, m_2Wto2W._1._2, m_2Wto2W._2)
-    val val2Wto2W = if (temp.size > 0) temp.toInt else 0
-    // temp = getAccuracy(validation, m_1Dto1D._1._1, m_1Dto1D._1._2, m_1Dto1D._2)
-    //  val val1Dto1D = if (temp.size > 0) temp.toInt else 0
-    PreVal2Wto2W = val2Wto2W
-    //  PreVal1Dto1D = val1Dto1D
-    PreVal4Yto2W = val4Yto2W
-    PreVal4Yto6M = val4Yto6M
-    if (is6month) {
-      if (val2Wto2W >= 97 || (val2Wto2W - val4Yto6M) >= 35 || ((val2Wto2W - val4Yto6M) >= 15 && val2Wto2W >= 80)) {
-        currentModel = m_2Wto2W._2
-        modelTag = m_2Wto2W._1._1
-        modelNumber = m_2Wto2W._1._2
-        //    println("2w2w win 4y6m")
-      }
-      //   else if (val1Dto1D > val4Yto6M + 10 && val1Dto1D >= 907) {
-      //     currentModel = m_1Dto1D._2
-      //     modelTag = m_1Dto1D._1._1
-      //     modelNumber = m_1Dto1D._1._2
-      //   }
-      else {
-        currentModel = m_4Yto6M._2
-        modelTag = m_4Yto6M._1._1
-        modelNumber = m_4Yto6M._1._2
-        //     println("win 4y6m")
-      }
-    }
-    else {
-      if ((val2Wto2W >= 97) || (val2Wto2W - val4Yto2W) >= 35 || ((val2Wto2W - val4Yto2W) >= 15 && val2Wto2W >= 80)) {
-        currentModel = m_2Wto2W._2
-        modelTag = m_2Wto2W._1._1
-        modelNumber = m_2Wto2W._1._2
-        println("2w2w win 4y2w")
-      }
-      // else if (val1Dto1D >= 907 && (val1Dto1D > (val4Yto2W + 10))) {
-      //   currentModel = m_1Dto1D._2
-      //    modelTag = m_1Dto1D._1._1
-      //    modelNumber = m_1Dto1D._1._2
-      //  }
-      else {
-        currentModel = m_4Yto2W._2
-        modelTag = m_4Yto2W._1._1
-        modelNumber = m_4Yto2W._1._2
-        println("win 4y2w")
-
-      }
-    }
-
-  }
 
   override def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String] = {
     val currentQuery = sparkSession.sqlContext.sql(query).queryExecution.analyzed
     var tt: Long = 0
 
-    val x = sessions.get(ip)
-    if (!x.isDefined)
-      sessions.put(ip, new mutable.Queue[(Long, LogicalPlan, String)]())
-    else if (x.get.last._1 + gap < epoch)
-      sessions.get(ip).get.clear()
-    if (sessions.get(ip).get.size > 0)
-      tt = epoch - sessions.get(ip).get.last._1
-    sessions.get(ip).get.enqueue((epoch, currentQuery, queryToFeature(currentQuery, tt.toInt)))
+    sessions.enqueue((epoch, currentQuery, queryToFeature(currentQuery, tt.toInt)))
 
-    removeOldProcesses(epoch)
-    val ipQueryCount = sessions.getOrElse(ip, Seq()).size
     //  println(past.map(_._1))
-    if (ipQueryCount > 15)
-      sessions.get(ip).get.dequeue()
-    (sessions.map(_._1) ++ Seq(ip)).toSet.map(getNextQueriesForActiveSession).reduce(_ ++ _) //.filter(x => x(0).size > 0) //++ p //++past.map(x=>x._2.head)
+    if (sessions.size > 10)
+      sessions.dequeue()
+   getNextQueriesForActiveSession() //.filter(x => x(0).size > 0) //++ p //++past.map(x=>x._2.head)
   }
 
   override def readConfiguration(args: Array[String]): Unit = {
@@ -258,11 +184,11 @@ object Adaptive extends QueryEngine_Abs("MLLSTM") {
       is6month = args(20).toBoolean
   }
 
-  def getNextQueriesForActiveSession(ip: String): Seq[String] = {
-    val pastQuery = sessions.get(ip)
-    if (pastQuery.isDefined) {
+  def getNextQueriesForActiveSession(): Seq[String] = {
+    val pastQuery = sessions.toSeq
+    if (pastQuery.size>0) {
       System.in.close()
-      getQueriesText(scala.io.Source.fromURL(url + modelTag + "X" + modelNumber + "X" + pastQuery.get.flatMap(_._3.split(";")).map(featureToVector).mkString(delimiterVector) + "X" + windowSize).mkString)
+      getQueriesText(scala.io.Source.fromURL(url + modelTag + "X" + modelNumber + "X" + pastQuery.flatMap(_._3.split(";")).map(featureToVector).mkString(delimiterVector) + "X" + windowSize).mkString)
       //getQueriesText(scala.io.Source.fromURL(url + pastQuery.get.map(_._3).mkString(delimiterVector) + "X" + windowSize).mkString)
     } else Seq()
   }
@@ -345,13 +271,7 @@ object Adaptive extends QueryEngine_Abs("MLLSTM") {
     }).mkString(delimiterVector)
   }
 
-  def removeOldProcesses(epochCurrentQuery: Long): Unit = {
-    for (ip <- sessions)
-      if (ip._2.last._1 + gap < epochCurrentQuery) {
-        sessionPool.+=(sessions.get(ip._1).get.map(_._3).mkString(delimiterVector))
-        sessions.remove(ip._1)
-      }
-  }
+
 
   def vectorToQueryString(vec: String): Seq[(String, Int)] = {
     var accessCols = new ListBuffer[String]()
@@ -463,9 +383,9 @@ object Adaptive extends QueryEngine_Abs("MLLSTM") {
       else
         queries.+=("select count(*) from " + tables.mkString(",") + " where " + joinKey.mkString(" and ") + " group by " + groupBy.filter(v => tables.contains(v.split("\\.")(0))).mkString(","))
     }
-    //  queries.foreach(println)
-    //  println(arrivalRate)
-    //  println(".......")
+  //  queries.foreach(println)
+  //  println(arrivalRate)
+  //  println(".......")
 
     if (queries.size == 0)
       return Seq()

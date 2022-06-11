@@ -1,11 +1,14 @@
 package mains
 
+
 import costModel.LRUCostModel
-import definition.Paths._
+import org.apache.spark.sql.catalyst.plans.logical.ReturnAnswer
 import rules.logical.ApproximateInjector
 import rules.physical.SampleTransformation
 
-import scala.collection.Seq
+import scala.collection.{Seq, mutable}
+import definition.Paths._
+import mains.Taster.{changeSynopsesWithScan, executeAndStoreSample, prepareForExecution, sparkSession}
 
 
 object QuickrWithWarehouseLRU extends QueryEngine_Abs("QuickrWithWarehouseLRU") {
@@ -23,7 +26,7 @@ object QuickrWithWarehouseLRU extends QueryEngine_Abs("QuickrWithWarehouseLRU") 
     sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed));
     for (query <- queries) if (queryCNT <= testSize) {
       outputOfQuery = ""
-      costModel.addQuery(query,"",0)
+      //costModel.addQuery(query,"",0)
       val checkpointForAppQueryExecution = System.nanoTime()
       val prepareTime = System.nanoTime()
       val cheapestPhysicalPlan = costModel.suggest()
@@ -37,14 +40,15 @@ object QuickrWithWarehouseLRU extends QueryEngine_Abs("QuickrWithWarehouseLRU") 
           counterNumberOfGeneratedRow += 1
         })
       }
-    //  println(outputOfQuery)
+      //  println(outputOfQuery)
       costModel.updateWarehouse()
       tableName.clear()
       queryCNT += 1
     }
-    printReport(results)
+    printReport()
     flush()
   }
 
+  override def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String] = null
   override def readConfiguration(args: Array[String]): Unit = ???
 }

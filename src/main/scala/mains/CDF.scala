@@ -14,4 +14,7 @@ object CDF extends QueryEngine_Abs("CDF") {
 
 
   }
+
+  override def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String] = null
+
 }

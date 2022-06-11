@@ -11,7 +11,7 @@ import scala.collection.Seq
 object extraRulesWithoutSampling extends Strategy {
   def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
     case q@Quantile(quantileColAtt, quantilePart, confidence, error, seed, child) =>
-      Seq(QuantileSampleExec(quantileColAtt, quantilePart, planLater(child)))
+      Seq(QuantileSampleExec(quantileColAtt, quantilePart,plan.output, planLater(child)))
     case _ => Nil
   }
 }

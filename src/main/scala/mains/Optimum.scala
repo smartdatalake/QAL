@@ -4,6 +4,7 @@ import java.io.File
 
 import costModel.StaticCostModel
 import definition.Paths._
+import mains.Utopia._
 import operators.physical.{SampleExec, UniformSampleExec2, UniversalSampleExec2}
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference}
 import org.apache.spark.sql.catalyst.plans.logical.ReturnAnswer
@@ -12,6 +13,7 @@ import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHash
 import rules.logical.{ApproximateInjector, pushFilterUp}
 import rules.physical.SampleTransformationMultiple
 
+import scala.collection.mutable.ListBuffer
 import scala.collection.{Seq, mutable}
 import scala.reflect.io.Directory
 
@@ -20,7 +22,7 @@ object Optimum extends QueryEngine_Abs("Utopia") {
   val synopsesPool: mutable.HashMap[Int, (String, Long)] = new mutable.HashMap[Int, (String, Long)]()
   val reverseSynopsesPool: mutable.HashMap[String, Int] = new mutable.HashMap[String, Int]()
 
-  var queries: Seq[(String, String, Long)] = null
+  // var queries: Seq[(String, String, Long)] = null
 
   def main(args: Array[String]): Unit = {
     readConfiguration(args)
@@ -43,7 +45,7 @@ object Optimum extends QueryEngine_Abs("Utopia") {
     var counter = 1
     for (queries <- workload.sliding(6)) {
       //queries = loadWorkloadWithIP("skyServer", sparkSession).toSeq
-      this.queries = queries
+      //this.queries = queries
       println(counter  + "qqqqqqqqqqqqqqqqqqqqqqqq" + queries(0)._1)
       counter += 1
       val j = getJoinKeys()
@@ -254,4 +256,6 @@ object Optimum extends QueryEngine_Abs("Utopia") {
     })
     return true
   }
+
+  override def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String] = null
 }

@@ -1,9 +1,9 @@
 package mains
 
-import costModel.TasterCostModel
-import definition.Paths._
 import rules.logical.{ApproximateInjector, pushFilterUp}
 import rules.physical.{SampleTransformation, SampleTransformationMultiple}
+import costModel.TasterCostModel
+import definition.Paths._
 
 import scala.collection.Seq
 
@@ -14,24 +14,22 @@ object Taster extends QueryEngine_Abs("Taster") {
     readConfiguration(args)
     val costModel = new TasterCostModel(sparkSession, justAPP = justAPP, isAdaptive = isAdaptive)
     loadTables(sparkSession)
-    val queries = loadWorkloadWithIP("skyServer", sparkSession)
+    queries = loadWorkloadWithIP("skyServer", sparkSession)
     mapRDDScanRowCNT = readRDDScanRowCNT(sparkSession)
 
-    // if(!isExtended)
-    //  sparkSession.experimental.extraStrategies = Seq(SampleTransformationMultiple)
-    //  else
-    //  if (isExtended)
     sparkSession.experimental.extraStrategies = Seq(SampleTransformation)
-    // else sparkSession.experimental.extraStrategies = Seq(SampleTransformation)
-
     sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(confidence, error, seed), new pushFilterUp)
 
 
-    execute(queries, costModel)
+    execute(costModel)
 
-    printReport(results)
     flush()
   }
+
+
+
+  override def ReadNextQueries(query: String, ip: String, epoch: Long, i: Int): Seq[String]
+  = queries.slice((if (i - (windowSize ) < 0) 0 else i - (windowSize )), i).map(_._1).reverse
 
 
   /*

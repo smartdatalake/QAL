@@ -1,15 +1,16 @@
 package mains
 
-import org.apache.spark.sql.catalyst.expressions.{Expression, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.plans.JoinType
-import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, Join, LeafNode, LogicalPlan}
+import org.apache.spark.sql.execution.SparkPlan
 
 object QCS extends QueryEngine_Abs("QueryColumnSet") {
   def main(args: Array[String]): Unit = {
     loadTables(sparkSession)
     val queries = loadWorkloadWithIP("skyServer", sparkSession)
     for (query <- queries) {
-    //  println(query)
+      //  println(query)
       val qe = sparkSession.sql(query._1).queryExecution
       sparkSession.sql(query._1).show()
       println(qe.logical)
@@ -64,6 +65,8 @@ object QCS extends QueryEngine_Abs("QueryColumnSet") {
     case _ =>
       pl.children.flatMap(extractFilterCon)
   }
+
+  override def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String] = null
 
   override def readConfiguration(args: Array[String]): Unit = {}
 }

@@ -37,6 +37,9 @@ object SDL extends QueryEngine_Abs("QAL_SDL", true) {
   var REST = true
   val costModel = new TasterCostModel(sparkSession,justAPP,false)
 
+  override def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String] = {
+   return Seq() }
+
   def main(args: Array[String]): Unit = {
     readConfiguration(args)
     loadTables(sparkSession)
@@ -229,7 +232,7 @@ a.foreach(println)
     } else {
       checkAndCreateTable(sparkSession.sessionState.sqlParser.parsePlan(query_code))
       sparkSession.experimental.extraStrategies = Seq(/*SketchPhysicalTransformation,*/ SampleTransformation);
-      costModel.addQuery(query_code, "", 0, null)
+      //costModel.addQuery(query_code, "", 0, null)
       //appPhysicalPlan=
       // val subQuery = sparkSession.sqlContext.sql(query_code).queryExecution.analyzed
       // updateAttributeName(subQuery, new mutable.HashMap[String, Int]())

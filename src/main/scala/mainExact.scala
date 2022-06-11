@@ -267,56 +267,60 @@ object mainExact {
 }*/
 
 
-import definition.Paths.{counterForQueryRow, counterNumberOfRowGenerated, outputOfQuery, seed, start, testSize}
-import main.{analyzeArgs, getAggSubQueries, loadTables, numberOfExecutedSubQuery, queryWorkload, sparkSession, tokenizeQuery}
+import definition.Paths.{counterForQueryRow, getAggSubQueries, loadTables, outputOfQuery, start, testSize}
+import main.{analyzeArgs}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.plans.logical.ReturnAnswer
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.exchange.{EnsureRequirements, ReuseExchange}
 import org.apache.spark.sql.execution.{CollapseCodegenStages, PlanSubqueries, ReuseSubquery, SparkPlan}
-import rules.logical.{ApproximateInjector, pushFilterUp}
+import rules.logical.pushFilterUp
 
 import scala.collection.Seq
 
 object mainExact {
-  def main(args: Array[String]): Unit = {
-    SparkSession.setActiveSession(sparkSession)
-    System.setProperty("geospark.global.charset", "utf8")
-    sparkSession.sparkContext.setLogLevel("ERROR");
-    sparkSession.conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-    sparkSession.conf.set("spark.driver.maxResultSize", "8g")
-    sparkSession.conf.set("spark.sql.codegen.wholeStage", false); // disable codegen
-    sparkSession.conf.set("spark.sql.crossJoin.enabled", true)
-    sparkSession.experimental.extraOptimizations = Seq(new pushFilterUp);
-    val (bench, benchDir, dataDir) = analyzeArgs(args);
-    loadTables(sparkSession, bench, dataDir)
-    val queries = queryWorkload(bench, benchDir)
-    val timeTotal = System.nanoTime()
-    var counterNumberOfRowGenerated = 0
-    for (i <- start to queries.size - 1) {
-      if (i > start + testSize)
-        throw new Exception(outputOfQuery + "executed " + numberOfExecutedSubQuery + " queries in " + (System.nanoTime() - timeTotal) / 1000000000 + ", number of generated rows: " + counterNumberOfRowGenerated)
-      val query = queries(i)
-      // println(query)
-      val t = System.nanoTime()
-      val (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
-      , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
-      val subQueries = getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
-      outputOfQuery = ""
-      counterForQueryRow = 0
-      for (subQuery <- subQueries) {
-        val logicalPlans = subQuery.map(x => sparkSession.sessionState.optimizer.execute(x))
-        val physicalPlans = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x))).map(prepareForExecution).toList(0)
-        physicalPlans.executeCollectPublic().toList.foreach(row => {
-          outputOfQuery += row.toString()
-          counterForQueryRow += 1
-        })
-        numberOfExecutedSubQuery += 1
-      }
-      // println(counterForQueryRow + "," + (System.nanoTime() - t) / 1000000000)
-    }
-  }
-
+  val sparkSession = SparkSession.builder
+    .appName("mainExact")
+    .master("local[*]")
+    .getOrCreate();
+  /* def main(args: Array[String]): Unit = {
+     SparkSession.setActiveSession(sparkSession)
+     System.setProperty("geospark.global.charset", "utf8")
+     sparkSession.sparkContext.setLogLevel("ERROR");
+     sparkSession.conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+     sparkSession.conf.set("spark.driver.maxResultSize", "8g")
+     sparkSession.conf.set("spark.sql.codegen.wholeStage", false); // disable codegen
+     sparkSession.conf.set("spark.sql.crossJoin.enabled", true)
+     sparkSession.experimental.extraOptimizations = Seq(new pushFilterUp);
+     val (bench, benchDir, dataDir) = analyzeArgs(args);
+     loadTables(sparkSession)
+     val queries = loadWorkload(bench, sparkSession)
+     val timeTotal = System.nanoTime()
+     var counterNumberOfRowGenerated = 0
+     for (i <- start to queries.size - 1) {
+       if (i > start + testSize)
+         throw new Exception(outputOfQuery + "executed " + numberOfExecutedSubQuery + " queries in " + (System.nanoTime() - timeTotal) / 1000000000 + ", number of generated rows: " + counterNumberOfRowGenerated)
+       val query = queries(i)
+       // println(query)
+       val t = System.nanoTime()
+       val (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
+       , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
+       val subQueries = getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
+       outputOfQuery = ""
+       counterForQueryRow = 0
+       for (subQuery <- subQueries) {
+         val logicalPlans = subQuery.map(x => sparkSession.sessionState.optimizer.execute(x))
+         val physicalPlans = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x))).map(prepareForExecution).toList(0)
+         physicalPlans.executeCollectPublic().toList.foreach(row => {
+           outputOfQuery += row.toString()
+           counterForQueryRow += 1
+         })
+         numberOfExecutedSubQuery += 1
+       }
+       // println(counterForQueryRow + "," + (System.nanoTime() - t) / 1000000000)
+     }
+   }
+ */
   def prepareForExecution(plan: SparkPlan): SparkPlan = {
     preparations.foldLeft(plan) { case (sp, rule) => rule.apply(sp) }
   }

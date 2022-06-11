@@ -1,39 +1,28 @@
 //-XX:+UnlockCommercialFeatures -XX:+FlightRecorder -XX:StartFlightRecording=duration=30s,filename=QAL_recording.jfr
 
-import java.io.{BufferedReader, File, FileOutputStream, FileReader, FilenameFilter, PrintWriter}
-import java.net.ServerSocket
-import definition.{Paths, TableDefs}
-import extraSQL.extraSQLOperators
-import org.apache.spark.sql.catalyst.{AliasIdentifier, CatalystTypeConverters, InternalRow}
-import org.apache.spark.sql.{DataFrame, Dataset, Row, SQLContext, SparkSession, Strategy}
-import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, Join, LogicalPlan, Project, ReturnAnswer, Sort, SubqueryAlias}
+import java.io.{BufferedReader, File, FileReader, FilenameFilter}
+
+import org.apache.spark.sql.catalyst.AliasIdentifier
+import org.apache.spark.sql.{DataFrame, SparkSession, Strategy}
+import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.execution.{CollapseCodegenStages, FilterExec, LogicalRDD, PlanLater, PlanSubqueries, ProjectExec, RDDScanExec, ReuseSubquery, SparkPlan}
+import org.apache.spark.sql.execution._
 import rules.logical.{ApproximateInjector, pushFilterUp}
-import rules.physical.{ChangeSampleToScan, SampleTransformation, ScaleAggregateSampleExec}
+import rules.physical.{ChangeSampleToScan, SampleTransformation}
 import org.apache.spark.sql.catalyst.analysis._
 
 import scala.collection.{Seq, mutable}
 import scala.collection.mutable.ListBuffer
-import scala.io.Source
-import java.{lang, util}
-import operators.physical.{DistinctSampleExec2, SampleExec, UniformSampleExec2, UniformSampleExec2WithoutCI, UniversalSampleExec2}
+import operators.physical._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.JoinType
-import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.exchange.{EnsureRequirements, ReuseExchange}
-import org.apache.spark.sql.execution.joins.SortMergeJoinExec
-import org.apache.spark.sql.types.{BooleanType, StructField, StructType}
+import org.apache.spark.sql.types.BooleanType
 
 import scala.reflect.io.Directory
 import definition.Paths._
-import main.{costOfPlan, numberOfExecutedSubQuery}
-import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
-import org.apache.spark.sql.catalyst.plans.physical.Partitioning
-import org.apache.spark.sql.functions.col
-import org.apache.spark.util.Utils
 
+import scala.io.Source
 import scala.util.Random
 
 object main {
@@ -43,7 +32,6 @@ object main {
     .master("local[*]")
     .getOrCreate();
   val tableCounter = new mutable.HashMap[String, Int]()
-  var numberOfExecutedSubQuery = 0
   val threshold = 1000
   var numberOfRemovedSynopses = 0;
 
@@ -58,14 +46,11 @@ object main {
     sparkSession.conf.set("spark.sql.crossJoin.enabled", true)
 
     val (bench, benchDir, dataDir) = analyzeArgs(args);
-    loadTables(sparkSession, bench, dataDir)
-    mapRDDScanRowCNT = readRDDScanRowCNT(dataDir)
+    //loadTables(sparkSession)
+    mapRDDScanRowCNT = readRDDScanRowCNT("pathToParquet")
 
-    val queries = queryWorkload(bench, benchDir)
+    val queries =Seq()// loadWorkload(bench, sparkSession)
     val (extraOpt, extraStr) = setRules()
-    //    val server = new ServerSocket(4545)
-    // println("Server initialized:")
-    // while (true) {
     sparkSession.experimental.extraOptimizations = Seq(new ApproximateInjector(0.0, 0.0, seed), new pushFilterUp);
     sparkSession.experimental.extraStrategies = extraStr;
     var outString = ""
@@ -74,38 +59,32 @@ object main {
       val query = queries(i)
       // println(query)
       val (query_code, confidence, error, dataProfileTable, quantileCol, quantilePart, binningCol, binningPart
-      , binningStart, binningEnd, table, tempQuery) = tokenizeQuery(query)
-      if (quantileCol != "") {
-        outString = extraSQLOperators.execQuantile(sparkSession, tempQuery, table, quantileCol, quantilePart, confidence, error, seed)
-      } else if (binningCol != "")
-        outString = extraSQLOperators.execBinning(sparkSession, table, binningCol, binningPart, binningStart, binningEnd, confidence, error, seed)
-      else if (dataProfileTable != "")
-        outString = extraSQLOperators.execDataProfile(sparkSession, dataProfileTable, confidence, error, seed)
-      else {
-        try {
-          val subQueries = getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
-          outputOfQuery = ""
-          for (subQuery <- subQueries) {
-            //println(subQuery)
-            // val rawPlans = enumerateRawPlanWithJoin(subQuery)
-            // val logicalPlans = rawPlans.map(x => sparkSession.sessionState.optimizer.execute(x))
-            // val physicalPlans = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
-            // val costOfPhysicalPlan = physicalPlans.map(x => (x, costOfPlan(x, Seq()))).sortBy(_._2._2)
-            // costOfPhysicalPlan.foreach(println)
-            //  println("cheapest plan before execution preparation:")
-            // println(costOfPhysicalPlan(0)._1)
+      , binningStart, binningEnd, table, tempQuery) = (null,0,0,null,null,null,null,null,null,null,null,null)//tokenizeQuery(query)
 
-            //choose the best approximate physical plan and create related synopses, presently, the lowest-cost plan
-            //////////////////////////////////////////////////////////////////////////////////////////////////////////
-            val checkpointForSampleConstruction = System.nanoTime()
-            updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
-            val p = findBestPPWithFeatureVectors(subQuery, Seq(Seq(true, false), Seq(false, true)))
-            val pp = sparkSession.sessionState.planner.plan(ReturnAnswer(sparkSession.sessionState.optimizer.execute(subQuery))).toList(0)
+      try {
+        val subQueries = getAggSubQueries(sparkSession.sqlContext.sql(query_code).queryExecution.analyzed)
+        outputOfQuery = ""
+        for (subQuery <- subQueries) {
+          //println(subQuery)
+          // val rawPlans = enumerateRawPlanWithJoin(subQuery)
+          // val logicalPlans = rawPlans.map(x => sparkSession.sessionState.optimizer.execute(x))
+          // val physicalPlans = logicalPlans.flatMap(x => sparkSession.sessionState.planner.plan(ReturnAnswer(x)))
+          // val costOfPhysicalPlan = physicalPlans.map(x => (x, costOfPlan(x, Seq()))).sortBy(_._2._2)
+          // costOfPhysicalPlan.foreach(println)
+          //  println("cheapest plan before execution preparation:")
+          // println(costOfPhysicalPlan(0)._1)
+
+          //choose the best approximate physical plan and create related synopses, presently, the lowest-cost plan
+          //////////////////////////////////////////////////////////////////////////////////////////////////////////
+          val checkpointForSampleConstruction = System.nanoTime()
+          updateAttributeName(subQuery, new mutable.HashMap[String, Int]())
+          val p = findBestPPWithFeatureVectors(subQuery, Seq(Seq(true, false), Seq(false, true)))
+          val pp = sparkSession.sessionState.planner.plan(ReturnAnswer(sparkSession.sessionState.optimizer.execute(subQuery))).toList(0)
           var cheapestPhysicalPlan = changeSynopsesWithScan(pp)
           executeAndStoreSample(cheapestPhysicalPlan)
           executeAndStoreSketch(cheapestPhysicalPlan)
           cheapestPhysicalPlan = changeSynopsesWithScan(cheapestPhysicalPlan)
-          cheapestPhysicalPlan = prepareForExecution(cheapestPhysicalPlan)
+          // cheapestPhysicalPlan = prepareForExecution(cheapestPhysicalPlan,sparkSession)
           timeForSampleConstruction += (System.nanoTime() - checkpointForSampleConstruction)
           //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -113,10 +92,10 @@ object main {
           //////////////////////////////////////////////////////////////////////////////////////////////////////////
           val checkpointForSubQueryExecution = System.nanoTime()
           countReusedSample(cheapestPhysicalPlan)
-        //  cheapestPhysicalPlan.executeCollectPublic().toList.foreach(row => {
-       //     outputOfQuery += row.toString()
-       //     counterNumberOfRowGenerated += 1
-       //   })
+          cheapestPhysicalPlan.executeCollectPublic().toList.foreach(row => {
+            outputOfQuery += row.toString()
+            counterNumberOfGeneratedRow += 1
+          })
           timeForSubQueryExecution += (System.nanoTime() - checkpointForSubQueryExecution)
           numberOfExecutedSubQuery += 1
           //////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -134,13 +113,12 @@ object main {
           tableName.clear()
 
 
-          }
-          // println(counterForQueryRow + "," + (System.nanoTime() - t) / 1000000000)
         }
-        catch {
-          case e:Exception=>
-            print(e)
-        }
+        // println(counterForQueryRow + "," + (System.nanoTime() - t) / 1000000000)
+      }
+      catch {
+        case e: Exception =>
+          print(e)
       }
 
     }
@@ -151,12 +129,12 @@ object main {
         ParquetNameToSynopses.foreach(println)
         SynopsesToParquetName.foreach(println)
         parquetNameToHeader.foreach(println)*/
-    println(LRUorWindowBased.toString + "," + maxSpace + "," + windowSize + "," + fractionInitialize
+    println(LRUorWindowBased.toString + "," + maxSpace+ "," + windowSize + "," + "staticFraction"
       + "," + (System.nanoTime() - timeTotal) / 1000000000 + "," + timeForSubQueryExecution / 1000000000
       + "," + timeForSampleConstruction / 1000000000 + ","
       + timeForUpdateWarehouse / 1000000000 + "," + numberOfRemovedSynopses
       + "," + numberOfGeneratedSynopses + "," + numberOfSynopsesReuse + "," + numberOfExecutedSubQuery + ","
-      + counterNumberOfRowGenerated)
+      + counterNumberOfGeneratedRow)
     flush()
   }
 
@@ -204,10 +182,10 @@ object main {
           try {
             //  println(StructType(s.schema.toList.map(x=>new StructField("x",x.dataType,x.nullable,x.metadata))))
             val dfOfSample = sparkSession.createDataFrame(sparkSession.sparkContext.parallelize(s.executeCollectPublic()), s.schema)
-            dfOfSample.write.format("parquet").save(pathToSaveSynopses + name + ".parquet");
+            dfOfSample.write.format("parquet").save(pathToSaveSynopses + name + ".obj");
             dfOfSample.createOrReplaceTempView(name)
             numberOfGeneratedSynopses += 1
-            warehouseParquetNameToSize.put(name.toLowerCase, folderSize(new File(pathToSaveSynopses + name + ".parquet")) /*view.rdd.count()*view.schema.map(_.dataType.defaultSize).reduce(_+_)*/)
+            warehouseParquetNameToSize.put(name.toLowerCase, folderSize(new File(pathToSaveSynopses + name + ".obj")) /*view.rdd.count()*view.schema.map(_.dataType.defaultSize).reduce(_+_)*/)
             ParquetNameToSynopses.put(name, synopsisInfo)
             SynopsesToParquetName.put(synopsisInfo, name)
             lastUsedCounter += 1
@@ -237,7 +215,7 @@ object main {
     val folder = (new File(pathToSaveSynopses)).listFiles.filter(_.isDirectory)
     for (i <- 0 to folder.size - 1) {
       val name = folder(i).getName.toLowerCase
-      if (!name.contains(".parquet") && !folder.find(_.getName == name + ".parquet").isDefined) {
+      if (!name.contains(".obj") && !folder.find(_.getName == name + ".obj").isDefined) {
         val f = new File(pathToSaveSynopses + name)
         val filenames = f.listFiles(new FilenameFilter() {
           override def accept(dir: File, name: String): Boolean = name.startsWith("part-")
@@ -251,8 +229,8 @@ object main {
               else theUnion = theUnion.union(d)
             }
           }
-          theUnion.toDF(parquetNameToHeader.getOrElse(name, "null").split(delimiterParquetColumn): _*).write.format("parquet").save(pathToSaveSynopses + name + ".parquet");
-          val view = sparkSession.read.parquet(pathToSaveSynopses + name + ".parquet")
+          theUnion.toDF(parquetNameToHeader.getOrElse(name, "null").split(delimiterParquetColumn): _*).write.format("parquet").save(pathToSaveSynopses + name + ".obj");
+          val view = sparkSession.read.parquet(pathToSaveSynopses + name + ".obj")
           sparkSession.sqlContext.createDataFrame(view.rdd, view.schema).createOrReplaceTempView(name)
           warehouseParquetNameToSize.put(name.toLowerCase, folderSize(new File(folder(i).getAbsoluteFile + ".parquet")) /*view.rdd.count()*view.schema.map(_.dataType.defaultSize).reduce(_+_)*/)
           numberOfGeneratedSynopses += 1
@@ -275,8 +253,8 @@ object main {
 
   def updateWarehouse(future: Seq[String]): Unit = {
     val warehouseSynopsesToSize = warehouseParquetNameToSize.map(x => (ParquetNameToSynopses(x._1), x._2))
-    if (warehouseSynopsesToSize.size == 0 || warehouseSynopsesToSize.reduce((a, b) => (null, a._2 + b._2))._2 <= maxSpace)
-      return Unit
+    if (warehouseSynopsesToSize.size == 0 || warehouseSynopsesToSize.reduce((a, b) => (null, a._2 + b._2))._2 <= maxSpace*10)
+      return
     // future approximate physical plans
     val rawPlansPerQuery = future.flatMap(query =>
       getAggSubQueries(sparkSession.sqlContext.sql(tokenizeQuery(query)._1).queryExecution.analyzed)
@@ -291,7 +269,7 @@ object main {
     val p = warehouseSynopsesToSize.map(synopsisInWarehouse => (synopsisInWarehouse, physicalPlansPerQuery.map(physicalPlans =>
       physicalPlans.map(physicalPlan => {
         //  println(synopsisInWarehouse+"\n"+physicalPlan+"\n"+(costOfPlan(physicalPlan, candidateSynopses)._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(synopsisInWarehouse))._2))
-        costOfPlan(physicalPlan, candidateSynopses)._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(synopsisInWarehouse))._2
+        0//costOfPlan(physicalPlan, candidateSynopses)._2 - costOfPlan(physicalPlan, candidateSynopses ++ Seq(synopsisInWarehouse))._2
       }).reduce((A1, A2) => if (A1 > A2) A1 else A2)
     ).reduce(_ + _))).map(x => (x._1._1, x._2)).toList.sortBy(_._2).reverse
     //println("best is:\n"+bestSynopsis)
@@ -301,7 +279,7 @@ object main {
     var bestSynopsisSize = warehouseSynopsesToSize.getOrElse(bestSynopsis._1, 0.toLong)
     val removeSynopses = new mutable.HashSet[String]()
     while (index < warehouseSynopsesToSize.size - 1) {
-      if (candidateSynopsesSize + bestSynopsisSize < maxSpace) {
+      if (candidateSynopsesSize + bestSynopsisSize < maxSpace*10) {
         candidateSynopsesSize += bestSynopsisSize
         index += 1
         bestSynopsis = p(index)
@@ -316,7 +294,7 @@ object main {
     }
     removeSynopses.foreach(x => {
       val parquetName = SynopsesToParquetName.getOrElse(x, "null")
-      (Directory(new File(pathToSaveSynopses + parquetName + ".parquet"))).deleteRecursively()
+      (Directory(new File(pathToSaveSynopses + parquetName + ".obj"))).deleteRecursively()
       warehouseParquetNameToSize.remove(parquetName)
       SynopsesToParquetName.remove(x)
       ParquetNameToSynopses.remove(parquetName)
@@ -389,62 +367,13 @@ object main {
     })
   }*/
 
-  def costOfPlan(pp: SparkPlan, synopsesCost: Seq[(String, Long)]): (Long, Long) = pp match { //(#row,CostOfPlan)
-    case FilterExec(filters, child) =>
-      val (inputSize, childCost) = costOfPlan(child, synopsesCost)
-      ((filterRatio * inputSize).toLong, costOfFilter * inputSize + childCost)
-    case ProjectExec(projectList, child) =>
-      val (inputSize, childCost) = costOfPlan(child, synopsesCost)
-      val projectRatio = projectList.size / child.output.size.toDouble
-      ((projectRatio * inputSize).toLong, costOfProject * inputSize + childCost)
-    case SortMergeJoinExec(a, b, c, d, left, right) =>
-      val (leftInputSize, leftChildCost) = costOfPlan(left, synopsesCost)
-      val (rightInputSize, rightChildCost) = costOfPlan(right, synopsesCost)
-      val outputSize = leftInputSize * rightInputSize
-      (outputSize, costOfJoin * outputSize + leftChildCost + rightChildCost)
-    case l@RDDScanExec(a, b, s, d, g) =>
-      val size: Long = mapRDDScanRowCNT.getOrElse(definition.Paths.getTableColumnsName(l.output).mkString(";").toLowerCase, -1)
-      if (size == -1)
-        throw new Exception("The size does not exist: " + l.toString())
-      (size, costOfScan * size)
-    case s@UniformSampleExec2(functions, confidence, error, seed, child) =>
-      synopsesCost.find(x => isMoreAccurate(s, x._1)).map(x => (x._2, costOfScan * x._2)).getOrElse({
-        val (inputSize, childCost) = costOfPlan(child, synopsesCost)
-        ((s.fraction * inputSize).toLong, costOfUniformSample * inputSize + childCost)
-      })
-    case s@DistinctSampleExec2(functions, confidence, error, seed, groupingExpression, child) =>
-      synopsesCost.find(x => isMoreAccurate(s, x._1)).map(x => (x._2, costOfScan * x._2)).getOrElse({
-        val (inputSize, childCost) = costOfPlan(child, synopsesCost)
-        ((s.fraction * inputSize).toLong, costOfDistinctSample * inputSize + childCost)
-      })
-    case s@UniversalSampleExec2(functions, confidence, error, seed, joinKeys, child) =>
-      synopsesCost.find(x => isMoreAccurate(s, x._1)).map(x => (x._2, costOfScan * x._2)).getOrElse({
-        val (inputSize, childCost) = costOfPlan(child, synopsesCost)
-        ((s.fraction * inputSize).toLong, costOfUniversalSample * inputSize + childCost)
-      })
-    case s@UniformSampleExec2WithoutCI(seed, child) =>
-      synopsesCost.find(x => isMoreAccurate(s, x._1)).map(x => (x._2, costOfScan * x._2)).getOrElse({
-        val (inputSize, childCost) = costOfPlan(child, synopsesCost)
-        ((s.fraction * inputSize).toLong, costOfUniformWithoutCISample * inputSize + childCost)
-      })
-    case s@ScaleAggregateSampleExec(confidence, error, seed, fraction, resultsExpression, child) =>
-      val (rowCNT, childCost) = child.map(x => costOfPlan(x, synopsesCost)).reduce((a, b) => (a._1 + b._1, a._2 + b._2))
-      (rowCNT, costOfScale * rowCNT + childCost)
-    case h@HashAggregateExec(requiredChildDistributionExpressions, groupingExpressions, aggregateExpressions, aggregateAttributes, initialInputBufferOffset, resultExpressions, child) =>
-      val (rowCNT, childCost) = costOfPlan(child, synopsesCost)
-      (rowCNT, HashAggregate * rowCNT + childCost)
-    case h@SortAggregateExec(requiredChildDistributionExpressions, groupingExpressions, aggregateExpressions, aggregateAttributes, initialInputBufferOffset, resultExpressions, child) =>
-      val (rowCNT, childCost) = costOfPlan(child, synopsesCost)
-      (rowCNT, SortAggregate * rowCNT + childCost)
-    case _ =>
-      throw new Exception("No cost is defined for the node")
-  }
+
 
 
   def updateWareHouseLRU: Unit = {
     val warehouseSynopsesToSize = warehouseParquetNameToSize.map(x => (ParquetNameToSynopses(x._1), x._2))
-    if (warehouseSynopsesToSize.size == 0 || warehouseSynopsesToSize.reduce((a, b) => (null, a._2 + b._2))._2 <= maxSpace)
-      return Unit
+    if (warehouseSynopsesToSize.size == 0 || warehouseSynopsesToSize.reduce((a, b) => (null, a._2 + b._2))._2 <= maxSpace*10)
+      return
     var candidateSynopsesSize: Long = 0
     val p = lastUsedOfParquetSample.toList.sortBy(_._2).reverse
     var index = 0
@@ -452,7 +381,7 @@ object main {
     var bestSynopsisSize = warehouseSynopsesToSize.getOrElse(ParquetNameToSynopses(bestSynopsis._1), 0.toLong)
     val removeSynopses = new mutable.HashSet[String]()
     while (index < warehouseSynopsesToSize.size - 1) {
-      if (candidateSynopsesSize + bestSynopsisSize < maxSpace) {
+      if (candidateSynopsesSize + bestSynopsisSize < maxSpace*10) {
         candidateSynopsesSize += bestSynopsisSize
         index += 1
         bestSynopsis = p(index)
@@ -466,7 +395,7 @@ object main {
       }
     }
     removeSynopses.foreach(x => {
-      (Directory(new File(pathToSaveSynopses + x + ".parquet"))).deleteRecursively()
+      (Directory(new File(pathToSaveSynopses + x + ".obj"))).deleteRecursively()
       warehouseParquetNameToSize.remove(x)
       SynopsesToParquetName.remove(ParquetNameToSynopses.getOrElse(x, "null"))
       ParquetNameToSynopses.remove(x)
@@ -479,7 +408,7 @@ object main {
 
 
   def flush(): Unit = {
-    (new File(pathToSaveSynopses)).listFiles.foreach(Directory(_).deleteRecursively())
+    (new File(pathToSaveSynopses)).listFiles.filter(_.getName.contains(".obj")).foreach(Directory(_).deleteRecursively())
     warehouseParquetNameToSize.clear()
     SynopsesToParquetName.clear()
     ParquetNameToSynopses.clear()
@@ -492,7 +421,7 @@ object main {
     numberOfGeneratedSynopses = 0
     numberOfRemovedSynopses = 0
     numberOfExecutedSubQuery = 0
-    counterNumberOfRowGenerated = 0
+    counterNumberOfGeneratedRow = 0
     timeForUpdateWarehouse = 0
     timeForSampleConstruction = 0
     timeTotal = 0
@@ -509,13 +438,6 @@ object main {
       t.children.foreach(child => countTable(child))
   }
 
-  def getAggSubQueries(lp: LogicalPlan): Seq[LogicalPlan] = lp match {
-
-    case a@Aggregate(groupingExpressions, aggregateExpressions, child) =>
-      Seq(a) ++ getAggSubQueries(child)
-    case a =>
-      a.children.flatMap(child => getAggSubQueries(child))
-  }
 
   def enumerateRawPlanWithJoin(rawPlan: LogicalPlan): Seq[LogicalPlan] = {
     var rootTemp: ListBuffer[LogicalPlan] = new ListBuffer[LogicalPlan]
@@ -748,7 +670,7 @@ object main {
       throw new Exception("No cost is defined for the node")
   }*/
 
-  def isMoreAccurate(sampleExec: SampleExec, sampleInf: String): Boolean = sampleExec match {
+  def isMoreAccurate(sampleExec: operators.physical.SampleExec, sampleInf: String): Boolean = sampleExec match {
     case u@UniformSampleExec2(functions, confidence, error, seed, child) =>
       val sampleInfo = sampleInf.split(delimiterSynopsisFileNameAtt)
       if (sampleInfo(0).equals("Uniform") && getHeaderOfOutput(u.output).split(delimiterParquetColumn).toSet.subsetOf(sampleInfo(1).split(delimiterParquetColumn).toSet)
@@ -790,14 +712,7 @@ object main {
     }
   }
 
-  def folderSize(directory: File): Long = {
-    var length: Long = 0
-    for (file <- directory.listFiles) {
-      if (file.isFile) length += file.length
-      else length += folderSize(file)
-    }
-    length / 100000
-  }
+
 
   def getTableName(s: String): String = {
     val startTableName = s.indexOf(" ")
@@ -863,20 +778,6 @@ object main {
       , binningStart, binningEnd, table, tempQuery)
   }
 
-  def loadTables(sparkSession: SparkSession, bench: String, dataDir: String) = {
-    if (bench.contains("tpch"))
-      TableDefs.load_tpch_tables(sparkSession, dataDir)
-    else if (bench.contains("skyServer"))
-      TableDefs.load_skyServer_tables(sparkSession, dataDir);
-    else if (bench.contains("atoka"))
-      TableDefs.load_atoka_tables(sparkSession, dataDir);
-    else if (bench.contains("test"))
-      TableDefs.load_test_tables(sparkSession, dataDir);
-    else if (bench.contains("proteus"))
-      TableDefs.load_proteus_tables(sparkSession, dataDir);
-    else
-      throw new Exception("!!!Invalid dataset!!!")
-  }
 
   def cleanSkyServerQuery(query: String): String = {
     var token = query.split(" ")
@@ -946,7 +847,7 @@ object main {
     val sf = args(1)
     val hdfsOrLocal = args(2)
     val inputDataFormat = args(3)
-    fractionInitialize = args(4).toDouble
+    //fractionInitialize = args(4).toDouble
     maxSpace = args(5).toInt * 10
     windowSize = args(6).toInt
     LRUorWindowBased = args(7).toBoolean
@@ -1028,20 +929,6 @@ object main {
 
   private def getSignature(filename: String, samplingRate: Int, attrname: String, proportionWithin: Int) = "SCV.csv" + "," + proportionWithin + "," + samplingRate + "," + attrname
 
-  private def findMinSample(answers: util.HashMap[String, Array[Double]], filename: String, attrname: String, desiredConfidence: Int, desiredError: Double, aggr: Int): Int = { // aggr is 0 for avg or 1 for sum
-    val proportionWithin: Int = desiredConfidence
-    for (samplingRate <- startSamplingRate to stopSamplingRate by samplingStep) {
-      val vall: Array[Double] = answers.get(getSignature(filename, samplingRate, attrname, proportionWithin))
-      if (vall != null) {
-        if (desiredError > vall(aggr)) {
-          if (samplingRate > 30)
-            return 30
-          return samplingRate
-        }
-      }
-    }
-    return 30
-  }
 
   def readRDDScanRowCNT(dataDir: String): mutable.HashMap[String, Long] = {
     val foldersOfParquetTable = new File(dataDir).listFiles.filter(x=>x.isDirectory && x.getName.contains(".parquet")&& !x.getName.contains("sample"))
@@ -1120,9 +1007,9 @@ object main {
     })
   }
 
-  def prepareForExecution(plan: SparkPlan): SparkPlan = {
-    preparations.foldLeft(plan) { case (sp, rule) => rule.apply(sp) }
-  }
+  //def prepareForExecution(plan: SparkPlan): SparkPlan = {
+  //   preparations.foldLeft(plan) { case (sp, rule) => rule.apply(sp) }
+  // }
 
   def changeSynopsesWithScan(plan: SparkPlan): SparkPlan = {
     ruleOfSynopsesToScan.foldLeft(plan) { case (sp, rule) => rule.apply(sp) }
@@ -1139,16 +1026,6 @@ object main {
     ReuseExchange(sparkSession.sessionState.conf),
     ReuseSubquery(sparkSession.sessionState.conf)
   )
-
-  def updateAttributeName(lp: LogicalPlan, tableFrequency: mutable.HashMap[String, Int]): Unit = lp match {
-    case SubqueryAlias(identifier, child@LogicalRDD(output, rdd, outputPartitioning, outputOrdering, isStreaming)) =>
-      val att = output.toList
-      tableFrequency.put(identifier.identifier, tableFrequency.getOrElse(identifier.identifier, 0) + 1)
-      for (i <- 0 to output.size - 1)
-        tableName.put(att(i).toAttribute.toString().toLowerCase, identifier.identifier + "_" + tableFrequency.get(identifier.identifier).get)
-    case a =>
-      a.children.foreach(x => updateAttributeName(x, tableFrequency))
-  }
 
 }
 

@@ -1,15 +1,15 @@
 package mains
 
-import java.io.{File, PrintWriter}
-
 import definition.Paths._
 import mains.density_cluster.sparkSession
 import org.apache.spark.sql.functions.col
+import java.io.{File, PrintWriter}
+
+import scala.collection.{Seq, mutable}
 import sparkSession.implicits._
 
-import scala.collection.mutable
-
 object workloadToVector extends QueryEngine_Abs("WorkloadToVector") {
+  override def ReadNextQueries(query: String, ip: String, epoch: Long, queryIndex: Int): Seq[String] = null
 
 
   val tag = (MAX_NUMBER_OF_QUERY_REPETITION + "maxNumberOfRepetition_" + ACCESSED_COL_MIN_FREQUENCY + "featureMinFRQ_" + YEAR_FROM + "fromYear")
